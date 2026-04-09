@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+{% block content %}
+<style>
+.notif-page{display:grid;grid-template-columns:340px 1fr;gap:18px}.notif-stat{padding:16px;border:1px solid #eadfcd;border-radius:18px;background:#fff}.notif-feed .item{display:block;padding:16px 18px;border:1px solid #eadfcd;border-radius:18px;background:#fff;color:inherit;text-decoration:none;margin-bottom:12px}.notif-feed .item.unread{border-left:5px solid #a26a2a;background:#fffaf2}.notif-feed .meta{display:flex;justify-content:space-between;gap:12px;margin-bottom:8px}.notif-feed .kind{display:inline-flex;padding:4px 10px;border-radius:999px;background:#f4e9d8;font-size:11px;font-weight:800;text-transform:uppercase}.notif-empty-card{padding:28px;border:1px dashed #d8c4ab;border-radius:18px;background:#fffaf5;text-align:center}.mini-actions form{display:inline} @media(max-width:980px){.notif-page{grid-template-columns:1fr}}
+</style>
+<div class="topbar"><div><h1>Notifications Center</h1><div class="muted small">Operational alerts, reminders, due tasks and system events in one professional feed.</div></div><div class="mini-actions"><form method="post" action="/notifications/read_all"><button type="submit">Mark all read</button></form></div></div>
+<div class="notif-page">
+  <div class="notif-stat">
+    <div class="tahhan-kicker">Inbox health</div>
+    <div class="grid grid-2" style="margin-top:12px">
+      <div class="kpi"><div class="muted">Total shown</div><div class="num">{{ rows|length }}</div></div>
+      <div class="kpi"><div class="muted">Unread</div><div class="num">{{ rows|selectattr('is_read','equalto',0)|list|length }}</div></div>
+    </div>
+    <div class="alert" style="margin-top:14px">Use notifications as your action inbox. Open the linked record directly to finish the task faster.</div>
+  </div>
+  <div>
+    {% if rows %}
+      <div class="notif-feed">
+      {% for r in rows %}
+        <a class="item {% if not r.is_read %}unread{% endif %}" href="/notifications/go/{{ r.id }}">
+          <div class="meta">
+            <div><span class="kind">{{ r.kind or 'general' }}</span></div>
+            <div class="small muted">{{ r.id }} · {{ r.created_at|int|datetimeformat if r.created_at else '-' }}</div>
+          </div>
+          <div style="font-weight:700;margin-bottom:6px">{{ r.message }}</div>
+          <div class="small muted">{{ 'Unread' if not r.is_read else 'Read' }} · {{ r.related_type or 'general' }}</div>
+        </a>
+      {% endfor %}
+      </div>
+    {% else %}
+      <div class="notif-empty-card">
+        <h3 style="margin-top:0">No notifications right now</h3>
+        <div class="muted">When payments become overdue, tasks are due, or assignments happen, they will show here.</div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

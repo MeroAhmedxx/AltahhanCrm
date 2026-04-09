@@ -1,0 +1,194 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="grid-hero" style="margin-bottom:18px">
+  <div class="hero-brand">
+    <span class="brand-chip">Altahhan Edition</span>
+    <h1 style="margin-top:10px">{{ 'Executive Operations Dashboard' if user.role == 'admin' else 'My Operations Dashboard' }}</h1>
+    <p class="muted" style="max-width:780px">A real command center for collection, shipments, tasks, documents and follow-ups. This version turns the dashboard into a working screen for management and operations, not just a summary page.</p>
+    <div class="quick-actions">
+      <a class="btn fit" href="/shipments">Open Shipments</a>
+      <a class="btn btn-secondary fit" href="/reports">Open Reports</a>
+      <a class="btn btn-secondary fit" href="/deals">Client Deals</a>
+      <a class="btn btn-secondary fit" href="/documents">Documents</a>
+      <a class="btn btn-secondary fit" href="/tasks">Tasks</a>
+    </div>
+  </div>
+  <div class="sand-card">
+    <div class="tahhan-kicker">Collection pulse</div>
+    <div class="grid grid-2" style="margin-top:12px">
+      <div class="kpi"><div class="muted">Total Paid</div><div class="num">{{ '%.2f'|format(finance.paid_total or 0) }}</div></div>
+      <div class="kpi"><div class="muted">Outstanding</div><div class="num">{{ '%.2f'|format(finance.outstanding_total or 0) }}</div></div>
+      <div class="kpi"><div class="muted">Overdue Amount</div><div class="num">{{ '%.2f'|format(finance.overdue_amount or 0) }}</div></div>
+      <div class="kpi"><div class="muted">Collection Rate</div><div class="num">{{ '%.1f'|format(finance.collection_rate or 0) }}%</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="grid grid-4" style="margin-bottom:18px">
+  <div class="kpi"><div class="muted">Open Shipments</div><div class="num">{{ stats.shipments_open }}</div></div>
+  <div class="kpi"><div class="muted">Shipments This Week</div><div class="num">{{ stats.shipments_this_week }}</div></div>
+  <div class="kpi"><div class="muted">Tasks Due Today</div><div class="num">{{ stats.tasks_due_today }}</div></div>
+  <div class="kpi"><div class="muted">Documents (30d)</div><div class="num">{{ stats.docs_generated_30d }}</div></div>
+</div>
+
+<div class="grid grid-4" style="margin-bottom:18px">
+  <div class="kpi"><div class="muted">Overdue Deals</div><div class="num">{{ finance.overdue_count }}</div></div>
+  <div class="kpi"><div class="muted">Partial Deals</div><div class="num">{{ finance.partial_count }}</div></div>
+  <div class="kpi"><div class="muted">Unpaid Deals</div><div class="num">{{ finance.unpaid_count }}</div></div>
+  <div class="kpi"><div class="muted">Missing Docs</div><div class="num">{{ stats.missing_docs }}</div></div>
+</div>
+
+<div class="grid grid-2">
+  <div class="card">
+    <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Overdue Collection Watchlist</h3><a href="/deals?payment_status=Overdue" class="btn btn-secondary">Open overdue</a></div>
+    <div class="table-wrap">
+      <table class="table">
+        <tr><th>Client</th><th>Shipment</th><th>Invoice</th><th>Due</th><th>Remaining</th></tr>
+        {% for d in overdue_deals %}
+        <tr>
+          <td><a href="/deal/{{ d.id }}">{{ d.client_name }}</a></td>
+          <td>{{ d.shipment_no }}</td>
+          <td>{{ d.invoice_no or '-' }}</td>
+          <td>{{ d.maturity_date or '-' }}</td>
+          <td>{{ '%.2f'|format(d.remaining_amount or 0) }} {{ d.currency }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="muted">No overdue deals right now.</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Recent Payments</h3><a href="/reports" class="btn btn-secondary">Finance reports</a></div>
+    <div class="table-wrap">
+      <table class="table">
+        <tr><th>Client</th><th>Shipment</th><th>Paid On</th><th>Amount</th><th>Ref</th></tr>
+        {% for p in recent_payments %}
+        <tr>
+          <td><a href="/deal/{{ p.deal_id }}">{{ p.client_name }}</a></td>
+          <td>{{ p.shipment_no or '-' }}</td>
+          <td>{{ p.paid_on or '-' }}</td>
+          <td>{{ '%.2f'|format(p.amount or 0) }} {{ p.currency or 'USD' }}</td>
+          <td>{{ p.reference_no or '-' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="muted">No payments recorded yet.</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="grid grid-2" style="margin-top:18px">
+  <div class="card">
+    <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Shipment Pulse</h3><a href="/shipments/dashboard" class="btn btn-secondary">View board</a></div>
+    <div class="shipment-card-list">
+      {% for s in shipment_rows %}
+      <div class="shipment-row-card">
+        <div class="shipment-row-head">
+          <div>
+            <div class="shipment-title">{{ s.shipment_no }}</div>
+            <div class="small muted">{{ s.company or s.supplier or '-' }}</div>
+          </div>
+          <span class="badge">{{ s.current_status }}</span>
+        </div>
+        <div class="small muted">{{ s.origin_port or '-' }} → {{ s.destination_port or '-' }}</div>
+        <div class="ship-line tahhan-line"><div style="width:{% if s.current_status == 'Booked' %}12{% elif s.current_status == 'Loaded' %}25{% elif s.current_status == 'Sailed' %}38{% elif s.current_status == 'At Sea' %}52{% elif s.current_status == 'Arrived' %}68{% elif s.current_status == 'Customs' %}84{% elif s.current_status == 'Delivered' %}95{% else %}100{% endif %}%"></div></div>
+        <div class="row spread-row" style="margin-top:8px">
+          <span class="small muted">ETA {% if s.eta_at and s.eta_at > 0 %}{{ s.eta_at|int|datetimeformat }}{% else %}-{% endif %}</span>
+          <a class="btn btn-secondary" href="/shipment/{{ s.id }}">Open</a>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty-state">No shipments yet.</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Today's Execution Queue</h3><a href="/tasks" class="btn btn-secondary">Open tasks</a></div>
+    <div class="table-wrap">
+      <table class="table">
+        <tr><th>Task</th><th>Status</th><th>Due</th><th>Assigned</th></tr>
+        {% for t in upcoming_tasks %}
+        <tr>
+          <td><a href="/task/{{ t.id }}">{{ t.title }}</a></td>
+          <td>{{ t.status }}</td>
+          <td>{% if t.due_at and t.due_at > 0 %}{{ t.due_at|int|datetimeformat }}{% else %}-{% endif %}</td>
+          <td>{{ t.assigned_to or '-' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="muted">No tasks scheduled.</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="grid grid-2" style="margin-top:18px">
+  <div class="card">
+    <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Top Clients by Value</h3><a href="/reports" class="btn btn-secondary">Open reports</a></div>
+    <div class="table-wrap">
+      <table class="table">
+        <tr><th>Client</th><th>Shipments</th><th>Containers</th><th>Total</th><th>Paid</th></tr>
+        {% for c in top_clients %}
+        <tr>
+          <td>{{ c.client_name }}</td>
+          <td>{{ c.shipments_count }}</td>
+          <td>{{ c.container_count }}</td>
+          <td>{{ '%.2f'|format(c.total_amount or 0) }}</td>
+          <td>{{ '%.2f'|format(c.paid_amount or 0) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="muted">No client finance data yet.</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Recent Activity</h3><a href="/activity" class="btn btn-secondary">Full activity</a></div>
+    <div class="table-wrap">
+      <table class="table">
+        <tr><th>User</th><th>Action</th><th>Details</th></tr>
+        {% for a in recent_activity[:8] %}
+        <tr><td>{{ a.username }}</td><td>{{ a.action }}</td><td>{{ a.details }}</td></tr>
+        {% else %}
+        <tr><td colspan="3" class="muted">No activity yet.</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="grid grid-2" style="margin-top:18px">
+  <div class="card">
+    <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Urgent Follow-ups</h3><a href="/followups" class="btn btn-secondary">Open follow-ups</a></div>
+    <div class="table-wrap">
+      <table class="table">
+        <tr><th>Type</th><th>Title</th><th>Due</th></tr>
+        {% for f in overdue_followups %}
+        <tr><td>{{ f.entity_type }}</td><td>{{ f.title }}</td><td>{% if f.followup_at and f.followup_at > 0 %}{{ f.followup_at|int|datetimeformat }}{% else %}-{% endif %}</td></tr>
+        {% else %}
+        <tr><td colspan="3" class="muted">No urgent follow-ups.</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Hot Leads</h3><a href="/leads" class="btn btn-secondary">Open leads</a></div>
+    <div class="table-wrap">
+      <table class="table">
+        <tr><th>Company</th><th>Stage</th><th>Score</th></tr>
+        {% for row in hot %}
+        <tr><td><a href="/lead/{{ row.id }}">{{ row.company }}</a></td><td>{{ row.stage }}</td><td>{{ row.score }}</td></tr>
+        {% else %}
+        <tr><td colspan="3" class="muted">No leads yet.</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
