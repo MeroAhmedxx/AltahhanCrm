@@ -23,6 +23,8 @@
 .attachment-row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08)}
 .flag-box .alert{background:rgba(255,255,255,.04);border:1px solid rgba(242,197,108,.16);color:#fff0da}
 #deal-create .small.muted{color:#d5b790!important}
+.alert{background:rgba(255,255,255,.04)!important;border:1px solid rgba(242,197,108,.16)!important;color:#fff0da!important;border-radius:14px;padding:12px 14px}
+.alert.success{background:rgba(60,191,122,.12)!important;border-color:rgba(60,191,122,.28)!important;color:#d7ffe8!important}
 @media(max-width:980px){.ship-hero,.health-grid,.summary-grid,.grid-2-pro{grid-template-columns:1fr}.summary-grid{grid-template-columns:1fr 1fr}}
 </style>
 <div class="topbar">
@@ -39,9 +41,9 @@
   </div>
 </div>
 
-{% if request.query_params.get('error') %}<div class="alert" style="margin-bottom:14px;background:#fff1f1;border-color:#efc6c6;color:#8a2a2a">{{ request.query_params.get('error') }}</div>{% endif %}
-{% if request.query_params.get('warning') %}<div class="alert" style="margin-bottom:14px;background:#fff8ee;border-color:#efcf9f;color:#7c5a1d">{{ request.query_params.get('warning') }}</div>{% endif %}
-{% if request.query_params.get('success') %}<div class="alert" style="margin-bottom:14px;background:#eefbf1;border-color:#cae8d0;color:#1e6b35">{{ request.query_params.get('success')|replace('_',' ')|title }}</div>{% endif %}
+{% if request.query_params.get('error') %}<div class="alert" style="margin-bottom:14px">{{ request.query_params.get('error') }}</div>{% endif %}
+{% if request.query_params.get('warning') %}<div class="alert" style="margin-bottom:14px">{{ request.query_params.get('warning') }}</div>{% endif %}
+{% if request.query_params.get('success') %}<div class="alert success" style="margin-bottom:14px">{{ request.query_params.get('success')|replace('_',' ')|title }}</div>{% endif %}
 
 <div class="ship-hero">
   <div class="pro-card">
@@ -109,22 +111,22 @@
     <div class="section-head"><h3 style="margin:0">Create customer deal</h3><span class="pulse-chip">Auto-ready for docs</span></div>
     <form method="post" action="/shipment/{{ shipment.id }}/deal/add" class="grid">
       <div class="grid grid-2">
-        <select name="client_mode"><option value="existing">Existing client</option><option value="new">New client</option></select>
-        <select name="client_id"><option value="0">Choose client (optional)</option>{% for c in clients %}<option value="{{ c.id }}">{{ c.company_en or c.company_ar or c.customer_code }}</option>{% endfor %}</select>
+        <select name="client_mode" id="clientMode"><option value="existing">Existing client</option><option value="new">New client</option></select>
+        <select name="client_id" id="clientId"><option value="0">Choose client (optional)</option>{% for c in clients %}<option value="{{ c.id }}">{{ c.company_en or c.company_ar or c.customer_code }}</option>{% endfor %}</select>
       </div>
-      <div class="grid grid-2"><input name="client_name" placeholder="Client name (for new client)"><input name="client_country" placeholder="Country"></div>
-      <textarea name="client_address" placeholder="Client address"></textarea>
-      <div class="grid grid-3"><input name="ice_no" placeholder="ICE / tax no"><input name="phone" placeholder="Phone"><input name="email" placeholder="Email"></div>
+      <div class="grid grid-2"><input name="client_name" id="clientName" placeholder="Client name (for new client)"><input name="client_country" id="clientCountry" placeholder="Country"></div>
+      <textarea name="client_address" id="clientAddress" placeholder="Client address"></textarea>
+      <div class="grid grid-3"><input name="ice_no" id="clientIce" placeholder="ICE / tax no"><input name="phone" placeholder="Phone"><input name="email" placeholder="Email"></div>
       <div class="grid grid-3"><input name="invoice_no" placeholder="Invoice no" required><input type="date" name="invoice_date"><input name="booking_no" placeholder="Booking no" value="{{ shipment.shipment_no }}"></div>
       <div class="grid grid-2"><input name="product_name" list="catalogProducts" placeholder="Product name" value="{{ shipment.product_name or '' }}"><input name="product_description" placeholder="Full product description"></div>
       <datalist id="catalogProducts">{% for p in product_presets %}<option value="{{ p.product_name }}{% if p.weight_label %} - {{ p.weight_label }}{% endif %}">{{ p.category }}{% if p.packaging %} · {{ p.packaging }}{% endif %}</option>{% endfor %}</datalist>
       <div class="small muted">Tip: choose from the Altahhan catalog presets so invoices and packing details stay consistent.</div>
       <div class="grid grid-4"><input name="qty_ton" type="number" step="0.001" placeholder="Qty ton"><input name="cartons_count" type="number" placeholder="Cartons"><input name="net_weight_ton" type="number" step="0.001" placeholder="Net weight ton"><input name="gross_weight_ton" type="number" step="0.001" placeholder="Gross weight ton"></div>
       <div class="grid grid-4"><input name="unit_price" type="number" step="0.01" placeholder="Unit price"><input name="freight_amount" type="number" step="0.01" placeholder="Freight"><input name="currency" value="USD" placeholder="Currency"><select name="payment_method"><option value="CAD">CAD</option><option value="Bill">Bill of Exchange</option></select></div>
-      <div class="grid grid-2"><input type="date" name="maturity_date" placeholder="Maturity date"><input name="consignee_bank_name" placeholder="Consignee bank name"></div>
-      <div class="grid grid-2"><input name="consignee_bank_account" placeholder="Consignee account no"><input name="consignee_bank_iban" placeholder="Consignee IBAN"></div>
-      <div class="grid grid-2"><input name="consignee_bank_swift" placeholder="Consignee SWIFT"><input name="consignee_bank_postal_code" placeholder="Bank postal code"></div>
-      <textarea name="consignee_bank_address" placeholder="Consignee bank address"></textarea>
+      <div class="grid grid-2"><input type="date" name="maturity_date" placeholder="Maturity date"><input name="consignee_bank_name" id="bankName" placeholder="Consignee bank name"></div>
+      <div class="grid grid-2"><input name="consignee_bank_account" id="bankAccount" placeholder="Consignee account no"><input name="consignee_bank_iban" id="bankIban" placeholder="Consignee IBAN"></div>
+      <div class="grid grid-2"><input name="consignee_bank_swift" id="bankSwift" placeholder="Consignee SWIFT"><input name="consignee_bank_postal_code" id="bankPostal" placeholder="Bank postal code"></div>
+      <textarea name="consignee_bank_address" id="bankAddress" placeholder="Consignee bank address"></textarea>
       <textarea name="notes" placeholder="Notes"></textarea>
       <div class="row" style="justify-content:flex-end"><button type="submit">Create deal</button></div>
     </form>
@@ -223,4 +225,82 @@
     <div class="small muted" style="margin-top:12px">This card turns shipment finance into a management tool: one screen, all customers, all outstanding balances.</div>
   </div>
 </div>
+
+<script>
+(function(){
+  const modeEl = document.getElementById('clientMode');
+  const clientEl = document.getElementById('clientId');
+  const fields = {
+    clientName: document.getElementById('clientName'),
+    clientCountry: document.getElementById('clientCountry'),
+    clientAddress: document.getElementById('clientAddress'),
+    clientIce: document.getElementById('clientIce'),
+    bankName: document.getElementById('bankName'),
+    bankAccount: document.getElementById('bankAccount'),
+    bankIban: document.getElementById('bankIban'),
+    bankSwift: document.getElementById('bankSwift'),
+    bankPostal: document.getElementById('bankPostal'),
+    bankAddress: document.getElementById('bankAddress')
+  };
+  if(!modeEl || !clientEl){ return; }
+
+  function setIfEmpty(el, value){
+    if(el && !String(el.value || '').trim()){ el.value = value || ''; }
+  }
+
+  function clearAutofill(){
+    ['clientName','clientCountry','clientAddress','clientIce','bankName','bankAccount','bankIban','bankSwift','bankPostal','bankAddress'].forEach(function(key){
+      const el = fields[key];
+      if(el){ el.value = ''; }
+    });
+  }
+
+  function parseValue(html, label){
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    let re = new RegExp('<th[^>]*>\\s*' + escaped + '\\s*<\\/th>\\s*<td[^>]*>([\\s\\S]*?)<\\/td>', 'i');
+    let m = html.match(re);
+    if(m && m[1]){
+      return m[1].replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    re = new RegExp(escaped + '\\s*[:：]\\s*([^<\\n]+)', 'i');
+    m = html.match(re);
+    return m && m[1] ? m[1].trim() : '';
+  }
+
+  async function autofill(){
+    if(modeEl.value !== 'existing' || !clientEl.value || clientEl.value === '0'){ return; }
+    try{
+      const res = await fetch('/current-client/' + clientEl.value, {credentials:'same-origin'});
+      const html = await res.text();
+      const selectedText = clientEl.options[clientEl.selectedIndex] ? clientEl.options[clientEl.selectedIndex].text.trim() : '';
+      setIfEmpty(fields.clientName, parseValue(html, 'Company Name (ENG)') || parseValue(html, 'Client') || selectedText);
+      setIfEmpty(fields.clientCountry, parseValue(html, 'Country'));
+      setIfEmpty(fields.clientAddress, parseValue(html, 'Address'));
+      setIfEmpty(fields.clientIce, parseValue(html, 'ICE'));
+      const bankName = parseValue(html, 'Name Of Bank') || parseValue(html, 'Bank Name');
+      const bankAddress = parseValue(html, 'Address Of Bank') || parseValue(html, 'Bank Address');
+      const swift = parseValue(html, 'Swift Code');
+      const postal = parseValue(html, 'Postal Code');
+      const iban = parseValue(html, 'IBAN & ACC NO') || parseValue(html, 'IBAN / Account');
+      setIfEmpty(fields.bankName, bankName);
+      setIfEmpty(fields.bankAccount, iban);
+      setIfEmpty(fields.bankIban, iban);
+      setIfEmpty(fields.bankSwift, swift);
+      setIfEmpty(fields.bankPostal, postal);
+      setIfEmpty(fields.bankAddress, bankAddress);
+    }catch(err){
+      console.error('autofill failed', err);
+    }
+  }
+
+  modeEl.addEventListener('change', function(){
+    if(modeEl.value === 'new'){ clearAutofill(); }
+    else { autofill(); }
+  });
+  clientEl.addEventListener('change', function(){
+    clearAutofill();
+    autofill();
+  });
+})();
+</script>
 {% endblock %}
