@@ -1,131 +1,91 @@
 {% extends 'base.html' %}
 {% block content %}
 <style>
-.ship-hero{display:grid;grid-template-columns:1.45fr .95fr;gap:18px;margin-bottom:18px}
-.pro-card,.flag-box{background:linear-gradient(180deg,rgba(32,17,12,.96),rgba(49,27,18,.94));border:1px solid rgba(242,197,108,.18);border-radius:18px;padding:16px;box-shadow:0 14px 35px rgba(0,0,0,.18);color:#fff4e8}
-.pro-card h3,.flag-box h3,.pro-card strong,.flag-box strong{color:#fff7ef}
-.pro-card .muted,.flag-box .muted{color:#d8c0a1!important}
-.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-.stat-card{padding:14px 16px;border:1px solid rgba(242,197,108,.14);border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.02));color:#fff4ea}
-.stat-card .muted{color:#d8c0a1!important}
-.pulse-chip{display:inline-flex;padding:6px 10px;border-radius:999px;background:rgba(242,197,108,.14);border:1px solid rgba(242,197,108,.24);font-size:12px;font-weight:800;margin:0 8px 8px 0;color:#ffe4b0}
-.danger-chip{background:rgba(197,78,63,.14);border-color:rgba(197,78,63,.34);color:#ffd4cf}
-.mini-table{width:100%;border-collapse:collapse}
-.mini-table td,.mini-table th{padding:10px 10px;border-bottom:1px solid rgba(255,255,255,.08);color:#fff1e5}
-.mini-table th{color:#ffe2ad;background:rgba(255,255,255,.03)}
-.timeline{position:relative;padding-left:18px}
-.timeline:before{content:'';position:absolute;left:6px;top:0;bottom:0;width:2px;background:rgba(242,197,108,.28)}
-.timeline-item{position:relative;padding:0 0 16px 18px;color:#f8e9d5}
-.timeline-item:before{content:'';position:absolute;left:-1px;top:4px;width:14px;height:14px;border-radius:50%;background:#c79752;box-shadow:0 0 0 4px rgba(242,197,108,.12)}
-.sticky-actions{display:flex;flex-wrap:wrap;gap:8px}
-.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
-.health-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-.attachment-row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08)}
-.flag-box .alert{background:rgba(255,255,255,.04);border:1px solid rgba(242,197,108,.16);color:#fff0da}
-#deal-create .small.muted{color:#d5b790!important}
-.alert{background:rgba(255,255,255,.04)!important;border:1px solid rgba(242,197,108,.16)!important;color:#fff0da!important;border-radius:14px;padding:12px 14px}
-.alert.success{background:rgba(60,191,122,.12)!important;border-color:rgba(60,191,122,.28)!important;color:#d7ffe8!important}
-@media(max-width:980px){.ship-hero,.health-grid,.summary-grid,.grid-2-pro{grid-template-columns:1fr}.summary-grid{grid-template-columns:1fr 1fr}}
+.stat-card{padding:14px 16px;border:1px solid #eadfcd;border-radius:16px;background:#fff}.deal-card{border:1px solid #e8dfd0;border-radius:16px;padding:14px;background:#fff}.deal-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.doc-pill{display:inline-flex;padding:4px 10px;border-radius:999px;background:#f6efe2;border:1px solid #e8d9c1;font-size:12px;margin:2px 6px 2px 0}.mini-table td{padding:8px 10px;border-bottom:1px solid #eee}.mini-table{width:100%;border-collapse:collapse}
+@media(max-width:980px){.deal-grid,.summary-grid{grid-template-columns:1fr}}
 </style>
-<div class="topbar">
-  <div>
-    <div class="brand-chip">Shipment Command Center</div>
-    <h1 style="margin-top:10px">{{ shipment.shipment_no }}</h1>
-    <div class="muted small">{{ shipment.company or 'No master company' }} · {{ shipment.origin_port or '-' }} → {{ shipment.destination_port or '-' }} · {{ shipment.current_status }}</div>
-  </div>
-  <div class="sticky-actions">
-    <a class="btn btn-secondary" href="/shipments">Back</a>
-    <a class="btn btn-secondary" href="/shipments/dashboard">Shipments board</a>
-    <a class="btn" href="#deal-create">Add deal</a>
-    <form method="post" action="/shipment/{{ shipment.id }}/generate-all-packs"><button type="submit">Generate Full Export Pack</button></form>
-  </div>
+<div class="topbar"><div><h1>{{ shipment.shipment_no }}</h1><div class="muted small">Shipment master for booking, vessel, ports and all customer deals under it.</div></div><div class="row"><a class="btn btn-secondary" href="/shipments">Back to Shipments</a><a class="btn" href="/shipments/dashboard">Dashboard</a></div></div>
+
+<div class="summary-grid">
+  <div class="stat-card"><div class="muted small">Route</div><strong>{{ shipment.origin_port or '-' }} → {{ shipment.destination_port or '-' }}</strong></div>
+  <div class="stat-card"><div class="muted small">Vessel</div><strong>{{ shipment.vessel_name or '-' }}</strong></div>
+  <div class="stat-card"><div class="muted small">Containers</div><strong>{{ shipment.container_count or 0 }} × {{ shipment.container_type or '-' }}</strong></div>
+  <div class="stat-card"><div class="muted small">Status</div><strong>{{ shipment.current_status }}</strong><div class="small muted">{{ meta.summary }}</div></div>
 </div>
 
-{% if request.query_params.get('error') %}<div class="alert" style="margin-bottom:14px">{{ request.query_params.get('error') }}</div>{% endif %}
-{% if request.query_params.get('warning') %}<div class="alert" style="margin-bottom:14px">{{ request.query_params.get('warning') }}</div>{% endif %}
-{% if request.query_params.get('success') %}<div class="alert success" style="margin-bottom:14px">{{ request.query_params.get('success')|replace('_',' ')|title }}</div>{% endif %}
-
-<div class="ship-hero">
-  <div class="pro-card">
-    <div class="section-head"><div><h3 style="margin:0">Operational snapshot</h3><div class="small muted">This shipment now acts like an operations workspace with collection, follow-up and document visibility.</div></div><span class="pulse-chip">{{ meta.summary }}</span></div>
-    <div class="summary-grid">
-      <div class="stat-card"><div class="muted small">Vessel</div><strong>{{ shipment.vessel_name or '-' }}</strong></div>
-      <div class="stat-card"><div class="muted small">Containers</div><strong>{{ shipment.container_count or 0 }} × {{ shipment.container_type or '-' }}</strong></div>
-      <div class="stat-card"><div class="muted small">Deals</div><strong>{{ shipment_kpis.deals_count }}</strong><div class="small muted">{{ shipment_kpis.missing_docs_count }} without doc pack</div></div>
-      <div class="stat-card"><div class="muted small">Open follow-ups</div><strong>{{ shipment_kpis.followups_open }}</strong><div class="small muted">{{ shipment_kpis.attachments_count }} attachments</div></div>
-      <div class="stat-card"><div class="muted small">Total value</div><strong>{{ '%.2f'|format(finance.total_amount or 0) }} {{ shipment.currency or 'USD' }}</strong></div>
-      <div class="stat-card"><div class="muted small">Collected</div><strong>{{ '%.2f'|format(finance.paid_amount or 0) }} {{ shipment.currency or 'USD' }}</strong><div class="small muted">Remaining {{ '%.2f'|format(finance.remaining_amount or 0) }}</div></div>
-      <div class="stat-card"><div class="muted small">ETD</div><strong>{% if shipment.etd_at and shipment.etd_at > 0 %}{{ shipment.etd_at|int|datetimeformat }}{% else %}-{% endif %}</strong></div>
-      <div class="stat-card"><div class="muted small">ETA</div><strong>{% if shipment.eta_at and shipment.eta_at > 0 %}{{ shipment.eta_at|int|datetimeformat }}{% else %}-{% endif %}</strong></div>
-    </div>
-    <div style="margin-top:14px">
-      <span class="pulse-chip">Status: {{ shipment.current_status }}</span>
-      <span class="pulse-chip">Docs: {{ shipment_kpis.docs_count }}</span>
-      <span class="pulse-chip">Timeline events: {{ shipment_kpis.timeline_count }}</span>
-      {% if finance.remaining_amount and finance.remaining_amount > 0 %}<span class="pulse-chip danger-chip">Open collection {{ '%.2f'|format(finance.remaining_amount or 0) }} {{ shipment.currency or 'USD' }}</span>{% endif %}
-    </div>
-  </div>
-  <div class="flag-box">
-    <div class="tahhan-kicker">Attention board</div>
-    <h3 style="margin-top:8px">What needs action now</h3>
-    {% if overdue_deals %}
-      <div class="alert" style="margin-bottom:10px">{{ overdue_deals|length }} overdue customer deal(s) need collection follow-up now.</div>
-      {% for d in overdue_deals %}
-        <div class="attachment-row"><div><strong>{{ d.client_name }}</strong><div class="small muted">{{ d.invoice_no or '-' }} · {{ d.maturity_date or '-' }}</div></div><a class="btn" href="/deal/{{ d.id }}">Open</a></div>
-      {% endfor %}
-    {% else %}
-      <div class="alert success" style="margin-bottom:10px">No overdue deals in this shipment.</div>
-    {% endif %}
-    <div class="small muted" style="margin-top:12px">Next follow-up</div>
-    <strong>{% if next_followup %}{{ next_followup.title }}{% else %}No follow-up scheduled{% endif %}</strong>
-    <div class="small muted">{% if next_followup and next_followup.followup_at %}{{ next_followup.followup_at|int|datetimeformat }}{% else %}Create one from the shipment tools when needed.{% endif %}</div>
-  </div>
-</div>
-
-<div class="grid grid-2" style="margin-bottom:18px">
-  <div class="pro-card">
-    <div class="section-head"><h3 style="margin:0">Customer deals inside this shipment</h3><a class="btn btn-secondary" href="/export/deals?shipment_q={{ shipment.shipment_no }}">Open deal register</a></div>
-    <div class="small muted" style="margin-bottom:12px">Each deal should end with a generated pack and a clean payment trail.</div>
+<div class="deal-grid" style="margin-top:18px">
+  <div class="card">
+    <h3>Customer deals inside this shipment</h3>
+    <div class="small muted" style="margin-bottom:12px">Each customer deal has its own invoice, packing list, and payment documents.</div>
     {% if deals %}
-      <div class="table-wrap">
-        <table class="mini-table">
-          <tr><th>Client</th><th>Invoice</th><th>Total</th><th>Paid</th><th>Remaining</th><th>Status</th><th></th></tr>
-          {% for d in deals %}
-          <tr>
-            <td><strong>{{ d.client_name or '-' }}</strong><div class="small muted">{{ d.product_name or '-' }}</div></td>
-            <td>{{ d.invoice_no or '-' }}<div class="small muted">{{ d.invoice_date or '-' }}</div></td>
-            <td>{{ '%.2f'|format(d.total_amount or 0) }} {{ d.currency or 'USD' }}</td>
-            <td>{{ '%.2f'|format(d.paid_amount or 0) }} {{ d.currency or 'USD' }}</td>
-            <td>{{ '%.2f'|format(d.remaining_amount or 0) }} {{ d.currency or 'USD' }}</td>
-            <td><span class="badge">{{ d.payment_status or 'Draft' }}</span></td>
-            <td><a class="btn" href="/deal/{{ d.id }}">Open deal</a></td>
-          </tr>
-          {% endfor %}
-        </table>
-      </div>
+      <table class="mini-table">
+        <tr><th>Client</th><th>Invoice</th><th>Amount</th><th>Status</th><th></th></tr>
+        {% for d in deals %}
+        <tr>
+          <td><strong>{{ d.client_name or '-' }}</strong><div class="small muted">{{ d.product_name or '-' }}</div></td>
+          <td>{{ d.invoice_no or '-' }}<div class="small muted">{{ d.invoice_date or '-' }}</div></td>
+          <td>{{ '%.2f'|format(d.total_amount or 0) }} {{ d.currency or 'USD' }}</td>
+          <td><span class="badge">{{ d.status or 'Draft' }}</span></td>
+          <td><a class="btn" href="/deal/{{ d.id }}">Open deal</a></td>
+        </tr>
+        {% endfor %}
+      </table>
     {% else %}
       <div class="alert">No customer deals yet. Add one deal for each client inside this shipment.</div>
     {% endif %}
   </div>
-  <div class="pro-card" id="deal-create">
-    <div class="section-head"><h3 style="margin:0">Create customer deal</h3><span class="pulse-chip">Auto-ready for docs</span></div>
+
+  <div class="card">
+    <h3>Add customer deal</h3>
+    <div class="small muted" style="margin-bottom:12px">Use existing client if already saved, or type a new client directly.</div>
     <form method="post" action="/shipment/{{ shipment.id }}/deal/add" class="grid">
       <div class="grid grid-2">
         <select name="client_mode" id="clientMode"><option value="existing">Existing client</option><option value="new">New client</option></select>
         <select name="client_id" id="clientId"><option value="0">Choose client (optional)</option>{% for c in clients %}<option value="{{ c.id }}">{{ c.company_en or c.company_ar or c.customer_code }}</option>{% endfor %}</select>
       </div>
-      <div class="grid grid-2"><input name="client_name" id="clientName" placeholder="Client name (for new client)"><input name="client_country" id="clientCountry" placeholder="Country"></div>
+      <div class="grid grid-2">
+        <input name="client_name" id="clientName" placeholder="Client name (for new client)">
+        <input name="client_country" id="clientCountry" placeholder="Country">
+      </div>
       <textarea name="client_address" id="clientAddress" placeholder="Client address"></textarea>
-      <div class="grid grid-3"><input name="ice_no" id="clientIce" placeholder="ICE / tax no"><input name="phone" placeholder="Phone"><input name="email" placeholder="Email"></div>
-      <div class="grid grid-3"><input name="invoice_no" placeholder="Invoice no" required><input type="date" name="invoice_date"><input name="booking_no" placeholder="Booking no" value="{{ shipment.shipment_no }}"></div>
-      <div class="grid grid-2"><input name="product_name" list="catalogProducts" placeholder="Product name" value="{{ shipment.product_name or '' }}"><input name="product_description" placeholder="Full product description"></div>
-      <datalist id="catalogProducts">{% for p in product_presets %}<option value="{{ p.product_name }}{% if p.weight_label %} - {{ p.weight_label }}{% endif %}">{{ p.category }}{% if p.packaging %} · {{ p.packaging }}{% endif %}</option>{% endfor %}</datalist>
-      <div class="small muted">Tip: choose from the Altahhan catalog presets so invoices and packing details stay consistent.</div>
-      <div class="grid grid-4"><input name="qty_ton" type="number" step="0.001" placeholder="Qty ton"><input name="cartons_count" type="number" placeholder="Cartons"><input name="net_weight_ton" type="number" step="0.001" placeholder="Net weight ton"><input name="gross_weight_ton" type="number" step="0.001" placeholder="Gross weight ton"></div>
-      <div class="grid grid-4"><input name="unit_price" type="number" step="0.01" placeholder="Unit price"><input name="freight_amount" type="number" step="0.01" placeholder="Freight"><input name="currency" value="USD" placeholder="Currency"><select name="payment_method"><option value="CAD">CAD</option><option value="Bill">Bill of Exchange</option></select></div>
-      <div class="grid grid-2"><input type="date" name="maturity_date" placeholder="Maturity date"><input name="consignee_bank_name" id="bankName" placeholder="Consignee bank name"></div>
-      <div class="grid grid-2"><input name="consignee_bank_account" id="bankAccount" placeholder="Consignee account no"><input name="consignee_bank_iban" id="bankIban" placeholder="Consignee IBAN"></div>
-      <div class="grid grid-2"><input name="consignee_bank_swift" id="bankSwift" placeholder="Consignee SWIFT"><input name="consignee_bank_postal_code" id="bankPostal" placeholder="Bank postal code"></div>
+      <div class="grid grid-3">
+        <input name="ice_no" id="clientIce" placeholder="ICE / tax no">
+        <input name="phone" placeholder="Phone">
+        <input name="email" placeholder="Email">
+      </div>
+      <div class="grid grid-3">
+        <input name="invoice_no" placeholder="Invoice no" required>
+        <input type="date" name="invoice_date">
+        <input name="booking_no" placeholder="Booking no" value="{{ shipment.shipment_no }}">
+      </div>
+      <div class="grid grid-2">
+        <input name="product_name" placeholder="Product name" value="{{ shipment.product_name or '' }}">
+        <input name="product_description" placeholder="Full product description">
+      </div>
+      <div class="grid grid-4">
+        <input name="qty_ton" type="number" step="0.001" placeholder="Qty ton">
+        <input name="cartons_count" type="number" placeholder="Cartons">
+        <input name="net_weight_ton" type="number" step="0.001" placeholder="Net weight ton">
+        <input name="gross_weight_ton" type="number" step="0.001" placeholder="Gross weight ton">
+      </div>
+      <div class="grid grid-4">
+        <input name="unit_price" type="number" step="0.01" placeholder="Unit price">
+        <input name="freight_amount" type="number" step="0.01" placeholder="Freight">
+        <input name="currency" value="USD" placeholder="Currency">
+        <select name="payment_method"><option value="CAD">CAD</option><option value="Bill">Bill of Exchange</option></select>
+      </div>
+      <div class="grid grid-2">
+        <input type="date" name="maturity_date" placeholder="Maturity date">
+        <input name="consignee_bank_name" id="bankName" placeholder="Consignee bank name">
+      </div>
+      <div class="grid grid-2">
+        <input name="consignee_bank_account" id="bankAccount" placeholder="Consignee account no">
+        <input name="consignee_bank_iban" id="bankIban" placeholder="Consignee IBAN">
+      </div>
+      <div class="grid grid-2">
+        <input name="consignee_bank_swift" id="bankSwift" placeholder="Consignee SWIFT">
+        <input name="consignee_bank_postal_code" id="bankPostal" placeholder="Bank postal code">
+      </div>
       <textarea name="consignee_bank_address" id="bankAddress" placeholder="Consignee bank address"></textarea>
       <textarea name="notes" placeholder="Notes"></textarea>
       <div class="row" style="justify-content:flex-end"><button type="submit">Create deal</button></div>
@@ -133,58 +93,8 @@
   </div>
 </div>
 
-<div class="grid grid-2" style="margin-bottom:18px">
-  <div class="pro-card">
-    <div class="section-head"><h3 style="margin:0">Shipment documents & attachments</h3><span class="pulse-chip">Shared across the team</span></div>
-    {% if docs %}
-      {% for d in docs %}
-        <div class="attachment-row"><div><strong>{{ d.title or d.doc_type|upper }}</strong><div class="small muted">{{ d.doc_type }} · {{ d.notes or 'No notes' }}</div></div>{% if d.filename %}{% if d.doc_type == 'export_pack' %}<a class="btn btn-secondary" href="/uploads/export_docs/{{ d.filename }}" target="_blank">Open</a>{% else %}<a class="btn btn-secondary" href="/uploads/shipments/{{ d.filename }}" target="_blank">Open</a>{% endif %}{% else %}<div class="small muted">Saved</div>{% endif %}</div>
-      {% endfor %}
-    {% else %}<div class="muted">No shipment-level files yet.</div>{% endif %}
-    {% if attachments %}
-      <div style="margin-top:14px">
-      {% for a in attachments %}
-        <div class="attachment-row"><div><strong>{{ a.original_name or a.filename }}</strong><div class="small muted">Attachment</div></div><a class="btn btn-secondary" href="/uploads/{{ a.filename }}" target="_blank">Open</a></div>
-      {% endfor %}
-      </div>
-    {% endif %}
-    <form method="post" action="/shipment/{{ shipment.id }}/document/add" enctype="multipart/form-data" class="grid" style="margin-top:14px">
-      <div class="grid grid-3"><select name="doc_type"><option value="bl">BL / AWB</option><option value="certificate">Certificate</option><option value="other">Other</option></select><input name="title" placeholder="Title"><select name="entry_mode"><option value="file">Upload file</option><option value="manual">Manual entry</option></select></div>
-      <textarea name="manual_text" placeholder="Manual text"></textarea>
-      <input type="file" name="file" accept=".pdf,image/*,.doc,.docx,.xls,.xlsx,.xlsm">
-      <textarea name="notes" placeholder="Notes"></textarea>
-      <button type="submit">Save shipment document</button>
-    </form>
-  </div>
-
-  <div class="pro-card">
-    <div class="section-head"><h3 style="margin:0">Follow-ups & timeline</h3><span class="pulse-chip">Operational memory</span></div>
-    {% if followups %}
-      <div class="table-wrap" style="margin-bottom:14px">
-        <table class="mini-table">
-          <tr><th>Title</th><th>Date</th><th>Status</th></tr>
-          {% for f in followups[:6] %}
-          <tr><td>{{ f.title }}</td><td>{% if f.followup_at %}{{ f.followup_at|int|datetimeformat }}{% else %}-{% endif %}</td><td>{{ f.status }}</td></tr>
-          {% endfor %}
-        </table>
-      </div>
-    {% else %}<div class="muted" style="margin-bottom:12px">No shipment follow-ups yet.</div>{% endif %}
-    <div class="timeline">
-      {% for a in timeline %}
-      <div class="timeline-item">
-        <div class="small muted">{{ a.created_at|int|datetimeformat if a.created_at else '-' }} · {{ a.username }}</div>
-        <div style="font-weight:700">{{ a.action|replace('_',' ')|title }}</div>
-        <div class="small muted">{{ a.entity_type or 'record' }}{% if a.details %} · {{ a.details }}{% endif %}</div>
-      </div>
-      {% else %}
-      <div class="muted">No timeline activity yet.</div>
-      {% endfor %}
-    </div>
-  </div>
-</div>
-
-<div class="grid grid-2">
-  <div class="pro-card">
+<div class="grid grid-2" style="margin-top:18px">
+  <div class="card">
     <h3>Shipment notes</h3>
     <form method="post" action="/shipment/{{ shipment.id }}/update" class="grid">
       <input type="hidden" name="trade_type" value="{{ shipment.trade_type }}">
@@ -214,22 +124,28 @@
       <button type="submit">Save notes</button>
     </form>
   </div>
-  <div class="pro-card">
-    <h3>Collection health</h3>
-    <div class="health-grid">
-      <div class="stat-card"><div class="muted small">Paid</div><strong>{{ '%.2f'|format(finance.paid_amount or 0) }}</strong></div>
-      <div class="stat-card"><div class="muted small">Remaining</div><strong>{{ '%.2f'|format(finance.remaining_amount or 0) }}</strong></div>
-      <div class="stat-card"><div class="muted small">Paid deals</div><strong>{{ deals|selectattr('payment_status','equalto','Paid')|list|length }}</strong></div>
-      <div class="stat-card"><div class="muted small">Overdue deals</div><strong>{{ overdue_deals|length }}</strong></div>
+  <div class="card">
+    <h3>Manual shipment documents</h3>
+    <div class="small muted" style="margin-bottom:12px">Use this only for shipment-wide files. Customer invoice/packing/CAD/Bill should be generated inside each deal.</div>
+    <div>
+      {% for d in docs %}
+      <div class="doc-pill">{{ d.doc_type }}</div>
+      {% else %}<div class="muted">No shipment-level files yet.</div>{% endfor %}
     </div>
-    <div class="small muted" style="margin-top:12px">This card turns shipment finance into a management tool: one screen, all customers, all outstanding balances.</div>
+    <form method="post" action="/shipment/{{ shipment.id }}/document/add" enctype="multipart/form-data" class="grid" style="margin-top:12px">
+      <div class="grid grid-3"><select name="doc_type"><option value="bl">BL / AWB</option><option value="certificate">Certificate</option><option value="other">Other</option></select><input name="title" placeholder="Title"><select name="entry_mode"><option value="file">Upload file</option><option value="manual">Manual entry</option></select></div>
+      <textarea name="manual_text" placeholder="Manual text"></textarea>
+      <input type="file" name="file" accept=".pdf,image/*,.doc,.docx,.xls,.xlsx,.xlsm">
+      <textarea name="notes" placeholder="Notes"></textarea>
+      <button type="submit">Save shipment document</button>
+    </form>
   </div>
 </div>
-
 <script>
 (function(){
   const modeEl = document.getElementById('clientMode');
   const clientEl = document.getElementById('clientId');
+  if(!modeEl || !clientEl) return;
   const fields = {
     clientName: document.getElementById('clientName'),
     clientCountry: document.getElementById('clientCountry'),
@@ -242,65 +158,30 @@
     bankPostal: document.getElementById('bankPostal'),
     bankAddress: document.getElementById('bankAddress')
   };
-  if(!modeEl || !clientEl){ return; }
-
-  function setIfEmpty(el, value){
-    if(el && !String(el.value || '').trim()){ el.value = value || ''; }
-  }
-
-  function clearAutofill(){
-    ['clientName','clientCountry','clientAddress','clientIce','bankName','bankAccount','bankIban','bankSwift','bankPostal','bankAddress'].forEach(function(key){
-      const el = fields[key];
-      if(el){ el.value = ''; }
-    });
-  }
-
-  function parseValue(html, label){
-    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    let re = new RegExp('<th[^>]*>\\s*' + escaped + '\\s*<\\/th>\\s*<td[^>]*>([\\s\\S]*?)<\\/td>', 'i');
-    let m = html.match(re);
-    if(m && m[1]){
-      return m[1].replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    }
-    re = new RegExp(escaped + '\\s*[:：]\\s*([^<\\n]+)', 'i');
-    m = html.match(re);
-    return m && m[1] ? m[1].trim() : '';
-  }
-
-  async function autofill(){
-    if(modeEl.value !== 'existing' || !clientEl.value || clientEl.value === '0'){ return; }
+  function setValue(el, value){ if(el){ el.value = value || ''; } }
+  function setIfEmpty(el, value){ if(el && !String(el.value||'').trim()){ el.value = value || ''; } }
+  function clearAutofill(){ Object.keys(fields).forEach(function(k){ setValue(fields[k], ''); }); }
+  async function fillFromClient(){
+    const id = parseInt(clientEl.value || '0', 10);
+    if(modeEl.value !== 'existing' || !id) return;
     try{
-      const res = await fetch('/current-client/' + clientEl.value, {credentials:'same-origin'});
-      const html = await res.text();
-      const selectedText = clientEl.options[clientEl.selectedIndex] ? clientEl.options[clientEl.selectedIndex].text.trim() : '';
-      setIfEmpty(fields.clientName, parseValue(html, 'Company Name (ENG)') || parseValue(html, 'Client') || selectedText);
-      setIfEmpty(fields.clientCountry, parseValue(html, 'Country'));
-      setIfEmpty(fields.clientAddress, parseValue(html, 'Address'));
-      setIfEmpty(fields.clientIce, parseValue(html, 'ICE'));
-      const bankName = parseValue(html, 'Name Of Bank') || parseValue(html, 'Bank Name');
-      const bankAddress = parseValue(html, 'Address Of Bank') || parseValue(html, 'Bank Address');
-      const swift = parseValue(html, 'Swift Code');
-      const postal = parseValue(html, 'Postal Code');
-      const iban = parseValue(html, 'IBAN & ACC NO') || parseValue(html, 'IBAN / Account');
-      setIfEmpty(fields.bankName, bankName);
-      setIfEmpty(fields.bankAccount, iban);
-      setIfEmpty(fields.bankIban, iban);
-      setIfEmpty(fields.bankSwift, swift);
-      setIfEmpty(fields.bankPostal, postal);
-      setIfEmpty(fields.bankAddress, bankAddress);
-    }catch(err){
-      console.error('autofill failed', err);
-    }
+      const res = await fetch('/api/v1/clients/' + id, {credentials:'same-origin', headers:{'Accept':'application/json'}});
+      if(!res.ok) return;
+      const data = await res.json();
+      setIfEmpty(fields.clientName, data.company_en || data.company_ar || data.customer_code || '');
+      setIfEmpty(fields.clientCountry, data.country || '');
+      setIfEmpty(fields.clientAddress, data.address || '');
+      setIfEmpty(fields.clientIce, data.ice || '');
+      setIfEmpty(fields.bankName, data.bank_name || '');
+      setIfEmpty(fields.bankAccount, data.iban_account || '');
+      setIfEmpty(fields.bankIban, data.iban_account || '');
+      setIfEmpty(fields.bankSwift, data.swift_code || '');
+      setIfEmpty(fields.bankPostal, data.postal_code || '');
+      setIfEmpty(fields.bankAddress, data.bank_address || '');
+    }catch(err){ console.error('client autofill failed', err); }
   }
-
-  modeEl.addEventListener('change', function(){
-    if(modeEl.value === 'new'){ clearAutofill(); }
-    else { autofill(); }
-  });
-  clientEl.addEventListener('change', function(){
-    clearAutofill();
-    autofill();
-  });
+  modeEl.addEventListener('change', function(){ if(modeEl.value === 'new'){ clearAutofill(); } else { fillFromClient(); } });
+  clientEl.addEventListener('change', function(){ clearAutofill(); fillFromClient(); });
 })();
 </script>
 {% endblock %}

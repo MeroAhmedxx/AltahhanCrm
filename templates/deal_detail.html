@@ -1,46 +1,16 @@
 {% extends 'base.html' %}
 {% block content %}
 <style>
-.hero-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-.hero-box{padding:16px;border:1px solid rgba(242,197,108,.14);border-radius:16px;background:linear-gradient(180deg,rgba(32,17,12,.96),rgba(49,27,18,.94));color:#fff4e8}
-.file-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08)}
-.pre-card{background:linear-gradient(180deg,rgba(32,17,12,.96),rgba(49,27,18,.94));border:1px solid rgba(242,197,108,.14);border-radius:16px;padding:14px;color:#fff4e8}
-.inline-edit{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:12px}
-.inline-edit form{margin:0}
-.inline-edit .row{align-items:end}
-.table th,.table td{color:#fff1e5}
-.alert{background:rgba(255,255,255,.04)!important;border:1px solid rgba(242,197,108,.16)!important;color:#fff0da!important;border-radius:14px;padding:12px 14px}
-.alert.success{background:rgba(60,191,122,.12)!important;border-color:rgba(60,191,122,.28)!important;color:#d7ffe8!important}
+.hero-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.hero-box{padding:16px;border:1px solid #eadfcd;border-radius:16px;background:#fff}.file-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #eee}.pre-card{background:#fbf7f1;border:1px solid #eadfcd;border-radius:16px;padding:14px}
 @media(max-width:980px){.hero-grid{grid-template-columns:1fr 1fr}}
 </style>
-
-<div class="topbar">
-  <div>
-    <h1>{{ deal.client_name or 'Customer Deal' }}</h1>
-    <div class="muted small">Shipment {{ shipment.shipment_no }} · Invoice {{ deal.invoice_no or '-' }}</div>
-  </div>
-  <div class="row">
-    <a class="btn btn-secondary" href="/shipment/{{ shipment.id }}">Back to Shipment</a>
-    <form method="post" action="/deal/{{ deal.id }}/generate"><button type="submit">Generate Document Pack</button></form>
-  </div>
-</div>
-
-{% if validation_issues %}
-<div class="alert" style="margin-bottom:16px">
-  <strong>Validation issues:</strong>
-  <ul style="margin:8px 0 0 18px">
-    {% for issue in validation_issues %}<li>{{ issue }}</li>{% endfor %}
-  </ul>
-</div>
-{% endif %}
-{% if request.query_params.get('success') %}<div class="alert success" style="margin-bottom:16px">{{ request.query_params.get('success')|replace('_',' ')|title }}</div>{% endif %}
-{% if request.query_params.get('error') %}<div class="alert" style="margin-bottom:16px">{{ request.query_params.get('error') }}</div>{% endif %}
+<div class="topbar"><div><h1>{{ deal.client_name or 'Customer Deal' }}</h1><div class="muted small">Shipment {{ shipment.shipment_no }} · Invoice {{ deal.invoice_no or '-' }}</div></div><div class="row"><a class="btn btn-secondary" href="/shipment/{{ shipment.id }}">Back to Shipment</a><form method="post" action="/deal/{{ deal.id }}/generate"><button type="submit">Generate Document Pack</button></form></div></div>
 
 <div class="hero-grid">
   <div class="hero-box"><div class="muted small">Amount</div><strong>{{ '%.2f'|format(payload.total_amount) }} {{ payload.currency }}</strong><div class="small muted">{{ payload.total_amount_words }}</div></div>
   <div class="hero-box"><div class="muted small">Weights</div><strong>{{ '%.3f'|format(payload.net_weight_ton) }} net / {{ '%.3f'|format(payload.gross_weight_ton) }} gross</strong></div>
   <div class="hero-box"><div class="muted small">Cartons</div><strong>{{ payload.cartons_count }}</strong></div>
-  <div class="hero-box"><div class="muted small">Payment</div><strong>{{ payment.payment_status }}</strong><div class="small muted">{{ '%.2f'|format(payment.remaining_amount) }} remaining</div></div>
+  <div class="hero-box"><div class="muted small">Payment</div><strong>{{ payload.payment_method }}</strong><div class="small muted">{{ deal.status or 'Draft' }}</div></div>
 </div>
 
 <div class="grid grid-2" style="margin-top:18px">
@@ -63,7 +33,7 @@
     <h3>What will be generated</h3>
     <div class="pre-card">
       <div><strong>Excel:</strong> invoice + packing list in one workbook</div>
-      <div style="margin-top:6px"><strong>PDF:</strong> generated when office conversion is available</div>
+      <div style="margin-top:6px"><strong>PDF:</strong> invoice/packing PDF via office conversion if available</div>
       <div style="margin-top:6px"><strong>Payment doc:</strong> {% if payload.payment_method == 'CAD' %}CAD cover{% else %}Bill of exchange{% endif %}</div>
       <div style="margin-top:6px"><strong>ZIP:</strong> one download containing all generated files</div>
     </div>
@@ -72,97 +42,16 @@
 </div>
 
 <div class="card" style="margin-top:18px">
-  <div class="section-head"><h3 style="margin:0">Structured items</h3></div>
-  {% if items %}
-    <table class="table">
-      <tr><th>Product</th><th>Qty ton</th><th>Cartons</th><th>Net</th><th>Gross</th><th>Unit price</th><th>Total</th></tr>
-      {% for item in items %}
-      <tr>
-        <td>{{ item.display_name }}{% if item.packaging %}<div class="small muted">{{ item.packaging }}</div>{% endif %}</td>
-        <td>{{ '%.3f'|format(item.qty_ton) }}</td>
-        <td>{{ item.cartons_count }}</td>
-        <td>{{ '%.3f'|format(item.net_weight_ton) }}</td>
-        <td>{{ '%.3f'|format(item.gross_weight_ton) }}</td>
-        <td>{{ '%.2f'|format(item.unit_price) }}</td>
-        <td>{{ '%.2f'|format(item.total_amount) }}</td>
-      </tr>
-      <tr><td colspan="7">
-        <div class="inline-edit">
-          <form method="post" action="/deal/{{ deal.id }}/item/{{ item.id }}/update" class="grid">
-            <div class="row">
-              <input type="number" step="0.001" name="qty_ton" value="{{ item.qty_ton }}" placeholder="Qty ton">
-              <input type="number" name="cartons_count" value="{{ item.cartons_count }}" placeholder="Cartons">
-              <input type="number" step="0.001" name="net_weight_ton" value="{{ item.net_weight_ton }}" placeholder="Net">
-              <input type="number" step="0.001" name="gross_weight_ton" value="{{ item.gross_weight_ton }}" placeholder="Gross">
-              <input type="number" step="0.01" name="unit_price" value="{{ item.unit_price }}" placeholder="Price">
-            </div>
-            <div class="row">
-              <input name="notes" value="{{ item.notes or '' }}" placeholder="Notes">
-              <button type="submit" class="fit">Update item</button>
-            </div>
-          </form>
-          <form method="post" action="/deal/{{ deal.id }}/item/{{ item.id }}/delete" style="margin-top:10px"><button type="submit" class="btn btn-danger">Delete item</button></form>
-        </div>
-      </td></tr>
-      {% endfor %}
-    </table>
-  {% else %}
-    <div class="alert">No structured items yet.</div>
-  {% endif %}
-  <div class="inline-edit" style="margin-top:14px">
-    <form method="post" action="/deal/{{ deal.id }}/item/add" class="grid">
-      <div class="row">
-        <input name="product_ref" list="catalogProducts" placeholder="Product from catalog">
-        <input type="number" step="0.001" name="qty_ton" placeholder="Qty ton">
-        <input type="number" name="cartons_count" placeholder="Cartons">
-        <input type="number" step="0.001" name="net_weight_ton" placeholder="Net">
-        <input type="number" step="0.001" name="gross_weight_ton" placeholder="Gross">
-        <input type="number" step="0.01" name="unit_price" placeholder="Unit price">
+  <h3>Generated files</h3>
+  {% if docs %}
+    {% for d in docs %}
+      <div class="file-row">
+        <div><strong>{{ d.document_type|replace('_',' ')|title }}</strong><div class="small muted">{{ d.file_kind|upper }} · {{ d.original_name or d.filename }}</div></div>
+        <a class="btn" target="_blank" href="/uploads/export_docs/{{ d.filename }}">Open</a>
       </div>
-      <input name="notes" placeholder="Notes">
-      <button type="submit">Add item</button>
-    </form>
-    <datalist id="catalogProducts">{% for p in catalog_products %}<option value="{{ p.product_name }}{% if p.weight_label %} - {{ p.weight_label }}{% endif %}">{{ p.category }}{% if p.packaging %} · {{ p.packaging }}{% endif %}</option>{% endfor %}</datalist>
-  </div>
-</div>
-
-<div class="grid grid-2" style="margin-top:18px">
-  <div class="card">
-    <h3>Payments</h3>
-    {% if payments %}
-      <table class="table">
-        <tr><th>Date</th><th>Amount</th><th>Reference</th><th>Notes</th></tr>
-        {% for p in payments %}
-        <tr><td>{{ p.paid_on or '-' }}</td><td>{{ '%.2f'|format(p.amount or 0) }}</td><td>{{ p.reference_no or '-' }}</td><td>{{ p.notes or '-' }}</td></tr>
-        {% endfor %}
-      </table>
-    {% else %}
-      <div class="alert">No payments recorded yet.</div>
-    {% endif %}
-    <div class="inline-edit" style="margin-top:14px">
-      <form method="post" action="/deal/{{ deal.id }}/payment/add" class="grid">
-        <div class="row">
-          <input type="number" step="0.01" name="amount" placeholder="Amount" required>
-          <input type="date" name="paid_on">
-          <input name="reference_no" placeholder="Reference no">
-        </div>
-        <input name="notes" placeholder="Notes">
-        <button type="submit">Add payment</button>
-      </form>
-    </div>
-  </div>
-  <div class="card">
-    <h3>Generated files</h3>
-    {% if docs %}
-      {% for d in docs %}
-        <div class="file-row">
-          <div><strong>{{ d.document_type|replace('_',' ')|title }}</strong><div class="small muted">{{ d.file_kind|upper }} · {{ d.original_name or d.filename }}</div></div>
-          <a class="btn" target="_blank" href="/uploads/export_docs/{{ d.filename }}">Open</a>
-        </div>
-      {% endfor %}
-    {% else %}
-      <div class="alert">No generated files yet.</div>
-    {% endif %}
-  </div>
+    {% endfor %}
+  {% else %}
+    <div class="alert">No generated files yet.</div>
+  {% endif %}
 </div>
 {% endblock %}

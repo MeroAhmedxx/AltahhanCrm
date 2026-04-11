@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title if title else branding.app_title }}</title>
   <link rel="stylesheet" href="/static/style.css?v=tradeflow-v15">
+  <link rel="stylesheet" href="/static/theme_overrides.css?v=altahhan-vnext-1">
   <script src="/static/lang/translator.js?v=3"></script>
   <style>
     body{margin:0;font-family:Arial,sans-serif}
@@ -26,20 +27,6 @@
     .header-search{display:flex;gap:8px;align-items:center;flex:1;max-width:480px}
     .header-search input{min-width:220px}
     .edition-badge{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);font-size:12px;color:#f6dfbe}
-    .notif-shell{position:relative}
-    .notif-trigger{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #eadfcd;border-radius:999px;padding:8px 12px;font-weight:700;color:#3b2b1f;cursor:pointer}
-    .notif-badge{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:#a43232;color:#fff;font-size:11px;font-weight:800}
-    .notif-panel{position:absolute;right:0;top:calc(100% + 10px);width:min(390px,92vw);background:#fff;border:1px solid #eadfcd;border-radius:18px;box-shadow:0 18px 48px rgba(0,0,0,.16);display:none;overflow:hidden;z-index:160}
-    .notif-shell.open .notif-panel{display:block}
-    .notif-panel-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #f0e5d8;background:#fcf8f3}
-    .notif-list{max-height:420px;overflow:auto}
-    .notif-item{display:block;padding:14px 16px;border-bottom:1px solid #f5ede4;color:inherit;text-decoration:none}
-    .notif-item:hover{background:#faf5ee;text-decoration:none}
-    .notif-item.unread{background:#fff8ee}
-    .notif-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px}
-    .notif-kind{display:inline-flex;padding:3px 8px;border-radius:999px;background:#f1e5d1;color:#6a4c2f;font-size:11px;font-weight:800;text-transform:uppercase}
-    .notif-empty{padding:18px;color:#7b6857}
-
     @media (max-width: 980px){
       .layout{display:block}
       .sidebar{width:280px;max-width:86vw;position:fixed;left:0;top:0;bottom:0;transform:translateX(-102%);transition:transform .22s ease;overflow:auto;z-index:120}
@@ -109,6 +96,7 @@
         <a href="/shipments" data-i18n="Shipments">Shipments</a>
         <a href="/documents" data-i18n="Documents">Documents</a>
         <a href="/export" data-i18n="Export Engine">Export Engine</a>
+        <a href="/ai-hub" data-i18n="AI + API Hub">AI + API Hub</a>
       </nav>
     </div>
     {% else %}
@@ -179,20 +167,7 @@
         </select>
         <a class="header-link" href="/intro" data-i18n="Intro">Intro</a>
         <a class="header-link" href="/tour" data-i18n="Product Tour">Product Tour</a>
-        <div class="notif-shell" id="notif-shell">
-          <button type="button" class="notif-trigger" id="notif-trigger" aria-label="Notifications">
-            <span>🔔</span>
-            <span data-i18n="Notifications">Notifications</span>
-            <span class="notif-badge" id="notif-badge" hidden>0</span>
-          </button>
-          <div class="notif-panel" id="notif-panel">
-            <div class="notif-panel-head">
-              <strong>Notifications</strong>
-              <a href="/notifications">Open all</a>
-            </div>
-            <div id="notif-list" class="notif-list"><div class="notif-empty">Loading...</div></div>
-          </div>
-        </div>
+        <a class="header-link" href="/notifications" data-i18n="Notifications">Notifications</a>
         <a class="header-link" href="/profile" data-i18n="Profile">Profile</a>
         <a class="header-link" href="/logout" data-i18n="Logout">Logout</a>
       </div>
@@ -223,6 +198,7 @@
         <a class="section-tab {% if path.startswith('/reports') %}active{% endif %}" href="/reports" data-i18n="Reports">Reports</a>
         <a class="section-tab {% if path.startswith('/agreements') or path.startswith('/agreement/') %}active{% endif %}" href="/agreements" data-i18n="Trade Library">Trade Library</a>
         <a class="section-tab {% if path.startswith('/export') %}active{% endif %}" href="/export" data-i18n="Export Engine">Export Engine</a>
+        <a class="section-tab {% if path.startswith('/ai-hub') %}active{% endif %}" href="/ai-hub" data-i18n="AI + API Hub">AI + API Hub</a>
       {% endif %}
     </div>
 
@@ -246,45 +222,5 @@ window.addEventListener('resize', function(){
   if(window.innerWidth>980 && layout){ layout.classList.remove('sidebar-open'); }
 });
 </script>
-
-<script>
-(function(){
-  const shell=document.getElementById('notif-shell');
-  const trigger=document.getElementById('notif-trigger');
-  const badge=document.getElementById('notif-badge');
-  const list=document.getElementById('notif-list');
-  if(!shell||!trigger||!badge||!list) return;
-  let latestId=0;
-  function escapeHtml(s){return String(s||'').replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
-  async function loadNotifications(){
-    try{
-      const res=await fetch('/notifications/dropdown', {credentials:'same-origin'});
-      const data=await res.json();
-      latestId=data.max_id||latestId;
-      const unread=Number(data.unread||0);
-      badge.hidden=!unread;
-      badge.textContent=unread>99?'99+':String(unread);
-      if(!data.rows || !data.rows.length){
-        list.innerHTML='<div class="notif-empty">No notifications right now.</div>';
-        return;
-      }
-      list.innerHTML=data.rows.map(function(r){
-        return '<a class="notif-item '+(r.is_read? '' : 'unread')+'" href="/notifications/go/'+r.id+'">'
-          +'<div class="notif-meta"><span class="notif-kind">'+escapeHtml(r.kind||'general')+'</span><span class="small muted">#'+r.id+'</span></div>'
-          +'<div>'+escapeHtml(r.message||'')+'</div>'
-          +(r.target_url?'<div class="small muted" style="margin-top:6px">Open linked record</div>':'')
-          +'</a>';
-      }).join('');
-    }catch(e){
-      list.innerHTML='<div class="notif-empty">Could not load notifications.</div>';
-    }
-  }
-  trigger.addEventListener('click', function(ev){ev.preventDefault(); shell.classList.toggle('open'); if(shell.classList.contains('open')) loadNotifications();});
-  document.addEventListener('click', function(ev){ if(!shell.contains(ev.target)) shell.classList.remove('open'); });
-  loadNotifications();
-  setInterval(loadNotifications, 30000);
-})();
-</script>
-
 </body>
 </html>

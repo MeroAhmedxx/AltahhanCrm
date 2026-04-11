@@ -1,0 +1,8 @@
+
+.card,.kpi,.mini,.mini-card,.lead-card,.shipment-row-card,.column,.notif-panel,.notif-trigger,.notif-panel-head,.tool-card,.room-item,.wa-sidebar,.wa-main,.wa-msg-bubble,.message-card,.reply-bubble,.reply-preview,.detail-row,.empty-state,.sidebar-footer-card{background:linear-gradient(180deg,var(--panel),var(--panel-2)) !important;color:var(--text) !important;border-color:rgba(202,160,61,.14) !important;}
+.notif-trigger,.notif-panel-head{color:var(--text)!important}
+input,select,textarea{background:#0b1728 !important;color:var(--text)!important;border-color:rgba(202,160,61,.18)!important}
+input::placeholder,textarea::placeholder{color:var(--muted)!important}
+.table th,.table td,.mini-table td,.mini-table th{background:transparent !important;color:var(--text)!important;border-color:rgba(255,255,255,.07)!important}
+.alert,.wizard-note,.notif-item,.notif-item.unread{background:rgba(255,255,255,.04)!important;color:var(--text)!important;border-color:rgba(242,197,108,.16)!important}
+.muted,.small,.detail-row span{color:var(--muted)!important}

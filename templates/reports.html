@@ -4,56 +4,24 @@
   <div class="hero-brand">
     <span class="brand-chip">Reports Center</span>
     <h1 style="margin-top:10px">Export Analysis</h1>
-    <p class="muted" style="max-width:760px">Shipment, client, payment and collection reporting in one place.</p>
-    <form method="get" action="/reports" class="card" style="margin-top:14px;padding:12px">
-      <div class="grid grid-4" style="gap:10px;align-items:end">
-        <div>
-          <label class="small muted">Period</label>
-          <select name="period">
-            <option value="week" {% if period=='week' %}selected{% endif %}>Week</option>
-            <option value="month" {% if period=='month' %}selected{% endif %}>Month</option>
-            <option value="quarter" {% if period=='quarter' %}selected{% endif %}>Quarter</option>
-            <option value="year" {% if period=='year' %}selected{% endif %}>Year</option>
-          </select>
-        </div>
-        <div>
-          <label class="small muted">Payment status</label>
-          <select name="payment_status">
-            <option value="" {% if not payment_status_filter %}selected{% endif %}>All</option>
-            <option value="Paid" {% if payment_status_filter=='Paid' %}selected{% endif %}>Paid</option>
-            <option value="Partial" {% if payment_status_filter=='Partial' %}selected{% endif %}>Partial</option>
-            <option value="Unpaid" {% if payment_status_filter=='Unpaid' %}selected{% endif %}>Unpaid</option>
-            <option value="Overdue" {% if payment_status_filter=='Overdue' %}selected{% endif %}>Overdue</option>
-            <option value="Draft" {% if payment_status_filter=='Draft' %}selected{% endif %}>Draft</option>
-          </select>
-        </div>
-        <div>
-          <label class="small muted">Client / shipment / item</label>
-          <input name="client_q" value="{{ client_q or '' }}" placeholder="Search client or shipment">
-        </div>
-        <div class="row" style="gap:8px;justify-content:flex-end">
-          <button type="submit">Apply</button>
-          <a class="btn btn-secondary" href="/reports/export?period={{ period }}">Export Excel</a>
-        </div>
-      </div>
-    </form>
+    <p class="muted" style="max-width:760px">A cleaner summary to replace common Excel analysis: customer totals, product movement, booking values and percentages.</p>
+    <div class="quick-actions">
+      <a class="btn{% if period=='week' %} btn-secondary{% endif %}" href="/reports?period=week">Week</a>
+      <a class="btn{% if period=='month' %} btn-secondary{% endif %}" href="/reports?period=month">Month</a>
+      <a class="btn{% if period=='quarter' %} btn-secondary{% endif %}" href="/reports?period=quarter">Quarter</a>
+      <a class="btn{% if period=='year' %} btn-secondary{% endif %}" href="/reports?period=year">Year</a>
+      <a class="btn btn-secondary" href="/reports/export?period={{ period }}">Export Excel</a>
+    </div>
   </div>
   <div class="sand-card">
     <div class="tahhan-kicker">Period summary</div>
     <div class="grid grid-2" style="margin-top:12px">
       <div class="kpi"><div class="muted">Shipments</div><div class="num">{{ summary.shipments_count or 0 }}</div></div>
       <div class="kpi"><div class="muted">Containers</div><div class="num">{{ summary.total_containers or 0 }}</div></div>
-      <div class="kpi"><div class="muted">Deals Total</div><div class="num">{{ '%.0f'|format(finance.deals_total or 0) }}</div></div>
-      <div class="kpi"><div class="muted">Collected</div><div class="num">{{ '%.0f'|format(finance.paid_total or 0) }}</div></div>
+      <div class="kpi"><div class="muted">Cartons</div><div class="num">{{ summary.total_cartons or 0 }}</div></div>
+      <div class="kpi"><div class="muted">Invoice Total</div><div class="num">{{ '%.0f'|format(summary.total_invoice_amount or 0) }}</div></div>
     </div>
   </div>
-</div>
-
-<div class="grid grid-4" style="margin-bottom:18px">
-  <div class="card"><div class="muted small">Overdue deals</div><div style="font-size:28px;font-weight:800">{{ finance.overdue_count or 0 }}</div><div class="small muted">{{ '%.2f'|format(finance.overdue_amount or 0) }} open</div></div>
-  <div class="card"><div class="muted small">Open collection</div><div style="font-size:28px;font-weight:800">{{ '%.2f'|format(finance.open_amount or 0) }}</div><div class="small muted">Partial + unpaid + overdue</div></div>
-  <div class="card"><div class="muted small">Unpaid deals</div><div style="font-size:28px;font-weight:800">{{ finance.unpaid_count or 0 }}</div><div class="small muted">Need follow-up</div></div>
-  <div class="card"><div class="muted small">Partial deals</div><div style="font-size:28px;font-weight:800">{{ finance.partial_count or 0 }}</div><div class="small muted">Mid-collection</div></div>
 </div>
 
 <div class="grid grid-2">
@@ -98,93 +66,23 @@
   </div>
 </div>
 
-<div class="grid grid-2" style="margin-top:18px">
-  <div class="card">
-    <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Collection Snapshot</h3><span class="small muted">Deals and collection health</span></div>
-    <table class="table">
-      <tr><th>Metric</th><th>Value</th></tr>
-      <tr><td>Deals count</td><td>{{ finance.deals_count or 0 }}</td></tr>
-      <tr><td>Deals total</td><td>{{ '%.2f'|format(finance.deals_total or 0) }}</td></tr>
-      <tr><td>Collected</td><td>{{ '%.2f'|format(finance.paid_total or 0) }}</td></tr>
-      <tr><td>Remaining</td><td>{{ '%.2f'|format(finance.remaining_total or 0) }}</td></tr>
-      <tr><td>Collection %</td><td>{{ finance.paid_pct or 0 }}%</td></tr>
-    </table>
-  </div>
-  <div class="card">
-    <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Client Finance</h3><span class="small muted">Per client paid and open amounts</span></div>
-    <div class="table-wrap">
-      <table class="table">
-        <tr><th>Client</th><th>Deals</th><th>Total</th><th>Paid</th><th>Remaining</th></tr>
-        {% for r in customer_finance %}
-        <tr>
-          <td>{{ r.client_name }}</td>
-          <td>{{ r.deals_count }}</td>
-          <td>{{ '%.2f'|format(r.deals_total or 0) }}</td>
-          <td>{{ '%.2f'|format(r.paid_total or 0) }}</td>
-          <td>{{ '%.2f'|format(r.remaining_total or 0) }}</td>
-        </tr>
-        {% else %}<tr><td colspan="5" class="muted">No finance data.</td></tr>{% endfor %}
-      </table>
-    </div>
-  </div>
-</div>
-
 <div class="card" style="margin-top:18px">
-  <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Payment Book</h3><span class="small muted">Latest deal collection rows</span></div>
+  <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Booking / Shipment Report</h3><span class="small muted">Latest movement by booking</span></div>
   <div class="table-wrap">
     <table class="table">
-      <tr><th>Invoice</th><th>Client</th><th>Shipment</th><th>Total</th><th>Paid</th><th>Remaining</th><th>Status</th><th>Maturity</th></tr>
-      {% for r in payment_book %}
+      <tr><th>Shipment</th><th>Customer</th><th>Containers</th><th>Cartons</th><th>Invoice</th><th>Status</th><th>ETD</th><th>ETA</th></tr>
+      {% for r in bookings %}
       <tr>
-        <td>{{ r.invoice_no or '-' }}</td>
-        <td>{{ r.client_name or '-' }}</td>
-        <td>{{ r.shipment_no or '-' }}</td>
-        <td>{{ '%.2f'|format(r.total_amount or 0) }}</td>
-        <td>{{ '%.2f'|format(r.paid_amount or 0) }}</td>
-        <td>{{ '%.2f'|format(r.remaining_amount or 0) }}</td>
-        <td><span class="badge">{{ r.payment_status }}</span></td>
-        <td>{{ r.maturity_date or '-' }}</td>
+        <td>{{ r.shipment_no }}</td>
+        <td>{{ r.company }}</td>
+        <td>{{ r.container_count }} {{ r.container_type }}</td>
+        <td>{{ r.cartons_count }}</td>
+        <td>{{ r.invoice_amount }} {{ r.currency }}</td>
+        <td><span class="badge">{{ r.current_status }}</span></td>
+        <td>{% if r.etd_at and r.etd_at > 0 %}{{ r.etd_at|int|datetimeformat }}{% else %}-{% endif %}</td>
+        <td>{% if r.eta_at and r.eta_at > 0 %}{{ r.eta_at|int|datetimeformat }}{% else %}-{% endif %}</td>
       </tr>
-      {% else %}<tr><td colspan="8" class="muted">No payment rows.</td></tr>{% endfor %}
-    </table>
-  </div>
-</div>
-
-<div class="card" style="margin-top:18px">
-  <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Shipment Finance</h3><span class="small muted">Shipment totals vs collected</span></div>
-  <div class="table-wrap">
-    <table class="table">
-      <tr><th>Shipment</th><th>Customer</th><th>Containers</th><th>Total</th><th>Paid</th><th>Remaining</th><th>Status</th></tr>
-      {% for r in shipment_finance %}
-      <tr>
-        <td>{{ r.shipment_no or '-' }}</td>
-        <td>{{ r.company or '-' }}</td>
-        <td>{{ r.containers or 0 }} × {{ r.container_type or '-' }}</td>
-        <td>{{ '%.2f'|format(r.deals_total or 0) }}</td>
-        <td>{{ '%.2f'|format(r.paid_total or 0) }}</td>
-        <td>{{ '%.2f'|format(r.remaining_total or 0) }}</td>
-        <td><span class="badge">{{ r.current_status or '-' }}</span></td>
-      </tr>
-      {% else %}<tr><td colspan="7" class="muted">No shipment finance rows.</td></tr>{% endfor %}
-    </table>
-  </div>
-</div>
-
-<div class="card" style="margin-top:18px">
-  <div class="topbar" style="margin-bottom:12px"><h3 style="margin:0">Container Detail</h3><span class="small muted">Client + shipment + item + status</span></div>
-  <div class="table-wrap">
-    <table class="table">
-      <tr><th>Shipment</th><th>Client</th><th>Item</th><th>Containers</th><th>Status</th><th>Invoice</th></tr>
-      {% for r in container_book %}
-      <tr>
-        <td>{{ r.shipment_no or '-' }}</td>
-        <td>{{ r.customer_name or '-' }}</td>
-        <td>{{ r.item_name or '-' }}</td>
-        <td>{{ r.container_count or 0 }} × {{ r.container_type or '-' }}</td>
-        <td><span class="badge">{{ r.current_status or '-' }}</span></td>
-        <td>{{ '%.2f'|format(r.invoice_amount or 0) }} {{ r.currency or 'USD' }}</td>
-      </tr>
-      {% else %}<tr><td colspan="6" class="muted">No container rows.</td></tr>{% endfor %}
+      {% else %}<tr><td colspan="8" class="muted">No bookings.</td></tr>{% endfor %}
     </table>
   </div>
 </div>

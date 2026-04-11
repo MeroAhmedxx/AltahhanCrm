@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="brand-chip">AI + API Hub</div>
+    <h1 style="margin-top:10px">Smart export tools</h1>
+    <div class="muted small">One place for AI content, deal readiness, and live FX checks.</div>
+  </div>
+</div>
+<div class="grid grid-3">
+  <div class="card">
+    <h3>AI Export Brief</h3>
+    <form method="get" action="/ai-hub" class="grid">
+      <input name="product_name" placeholder="Product" value="{{ product_name }}">
+      <input name="target_country" placeholder="Target country" value="{{ target_country }}">
+      <input name="buyer_type" placeholder="Buyer type" value="{{ buyer_type }}">
+      <input name="goal" placeholder="Goal" value="{{ goal }}">
+      <select name="tone"><option value="professional" {% if tone=='professional' %}selected{% endif %}>Professional</option><option value="direct" {% if tone=='direct' %}selected{% endif %}>Direct</option></select>
+      <button type="submit">Generate</button>
+    </form>
+    {% if export_result %}
+      <div class="soft-line" style="margin:14px 0"></div>
+      <div class="small muted">Suggested subject</div>
+      <div><strong>{{ export_result.subject }}</strong></div>
+      <div class="small muted" style="margin-top:10px">Recommended markets</div>
+      <ul>{% for m in export_result.recommended_markets %}<li>{{ m }}</li>{% endfor %}</ul>
+      <div class="small muted">Message draft</div>
+      <div class="pre">{{ export_result.body|safe }}</div>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h3>Deal Readiness API</h3>
+    <form method="get" action="/ai-hub" class="grid">
+      <select name="deal_id">
+        <option value="0">Choose deal</option>
+        {% for d in deal_rows %}<option value="{{ d.id }}" {% if deal_id==d.id %}selected{% endif %}>#{{ d.id }} · {{ d.invoice_no or 'No invoice' }} · {{ d.client_name or '-' }}</option>{% endfor %}
+      </select>
+      <button type="submit">Check deal</button>
+    </form>
+    {% if readiness %}
+      <div class="soft-line" style="margin:14px 0"></div>
+      <div class="row"><div><strong>Status:</strong> {% if readiness.issues %}<span class="badge priority-urgent">Needs work</span>{% else %}<span class="badge">Ready</span>{% endif %}</div><div><strong>Items:</strong> {{ readiness.items_count }}</div></div>
+      <div class="row"><div><strong>Payment:</strong> {{ readiness.payment.payment_status }}</div><div><strong>Remaining:</strong> {{ '%.2f'|format(readiness.payment.remaining_amount or 0) }}</div></div>
+      <div class="small muted" style="margin-top:10px">Issues</div>
+      {% if readiness.issues %}<ul>{% for issue in readiness.issues %}<li>{{ issue }}</li>{% endfor %}</ul>{% else %}<div class="empty-state">No blockers. This deal can generate documents.</div>{% endif %}
+    {% endif %}
+  </div>
+  <div class="card">
+    <h3>Live FX API</h3>
+    <form method="get" action="/ai-hub" class="grid">
+      <div class="grid grid-2">
+        <input name="fx_base" value="{{ fx_base }}" placeholder="Base">
+        <input name="fx_quote" value="{{ fx_quote }}" placeholder="Quote">
+      </div>
+      <button type="submit">Get rate</button>
+    </form>
+    {% if fx_result %}
+      <div class="soft-line" style="margin:14px 0"></div>
+      <div class="muted small">Current rate</div>
+      <div class="contrast-value" style="font-size:28px">1 {{ fx_result.base }} = {{ '%.4f'|format(fx_result.rate or 0) }} {{ fx_result.quote }}</div>
+      <div class="small muted">Source: public FX API</div>
+    {% endif %}
+    <div class="soft-line" style="margin:14px 0"></div>
+    <div class="small muted">Available internal APIs</div>
+    <div class="pre">GET /api/v1/clients/{id}
+GET /api/v1/deals/{id}/readiness
+GET /api/v1/shipments/{id}/summary
+GET /api/v1/fx?base_currency=USD&quote_currency=EUR</div>
+  </div>
+</div>
+{% endblock %}

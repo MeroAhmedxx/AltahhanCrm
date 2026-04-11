@@ -1,72 +1,42 @@
 {% extends 'base.html' %}
 {% block content %}
-<style>
-.doc-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:16px}.doc-kpi{padding:16px;border:1px solid #eadfcd;border-radius:16px;background:#fff}.doc-kpi .num{font-size:24px;font-weight:800}.doc-grid{display:grid;gap:12px}.doc-row{display:grid;grid-template-columns:120px 1.3fr 1fr 1fr 140px 180px;gap:12px;align-items:start;padding:14px;border:1px solid #eadfcd;border-radius:16px;background:#fff}.doc-meta{display:grid;gap:4px}.doc-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.doc-pill{display:inline-flex;padding:6px 10px;border-radius:999px;background:#f5ebdc;border:1px solid #eadfcd;font-size:12px;font-weight:800;text-transform:capitalize}.doc-source{display:inline-flex;padding:6px 10px;border-radius:999px;background:#eef4fb;border:1px solid #d6e5f8;font-size:12px;font-weight:800;text-transform:capitalize}
-@media(max-width:1100px){.doc-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.doc-row{grid-template-columns:1fr 1fr}.doc-actions{justify-content:flex-start}}
-@media(max-width:700px){.doc-kpis,.doc-row{grid-template-columns:1fr}}
-</style>
-<div class="topbar"><h1>Documents Center</h1><div class="muted">Unified view for shipment docs, generated export packs, invoices, and attachments.</div></div>
-
-<div class="doc-kpis">
-  <div class="doc-kpi"><div class="muted small">Visible docs</div><div class="num">{{ stats.total_docs or 0 }}</div></div>
-  <div class="doc-kpi"><div class="muted small">Shipment docs</div><div class="num">{{ stats.shipment_docs or 0 }}</div></div>
-  <div class="doc-kpi"><div class="muted small">Deal docs</div><div class="num">{{ stats.deal_docs or 0 }}</div></div>
-  <div class="doc-kpi"><div class="muted small">Invoice docs</div><div class="num">{{ stats.invoice_docs or 0 }}</div></div>
-  <div class="doc-kpi"><div class="muted small">Attachments</div><div class="num">{{ stats.attachment_docs or 0 }}</div></div>
-</div>
-
+<div class="topbar"><h1>Documents Center</h1></div>
 <div class="card">
-  <form method="get" class="grid grid-4" style="align-items:end">
+  <form method="get" class="grid grid-4" style="grid-template-columns:1.5fr 1fr auto;align-items:end">
     <input name="q" value="{{ q }}" placeholder="Search by title, shipment, client or notes">
     <select name="doc_type">
       <option value="">All document types</option>
-      {% for t in ['invoice','invoice_packing','packing_list','export_pack','cad_cover','bill_of_exchange','attachment','other','certificate','bl'] %}
-      <option value="{{ t }}" {% if doc_type_filter == t %}selected{% endif %}>{{ t|replace('_',' ')|title }}</option>
-      {% endfor %}
-    </select>
-    <select name="source_type">
-      <option value="">All sources</option>
-      {% for s in ['shipment','deal','client_invoice','attachment'] %}
-      <option value="{{ s }}" {% if source_type_filter == s %}selected{% endif %}>{{ s|replace('_',' ')|title }}</option>
+      {% for t in ['invoice','packing_list','attachment','other','certificate','bl'] %}
+      <option value="{{ t }}" {% if doc_type_filter == t %}selected{% endif %}>{{ t }}</option>
       {% endfor %}
     </select>
     <button type="submit">Filter</button>
   </form>
 </div>
-
-<div class="doc-grid">
+<div class="card"><table class="table"><tr><th>Type</th><th>Title</th><th>Source</th><th>Company</th><th>Entry</th><th>Preview / File</th><th>Created</th></tr>
 {% for r in rows %}
-  <div class="doc-row">
-    <div class="doc-meta">
-      <span class="doc-pill">{{ r.doc_type or 'other' }}</span>
-      <span class="doc-source">{{ r.source_type or '-' }}</span>
-    </div>
-    <div class="doc-meta">
-      <strong>{{ r.title or '-' }}</strong>
-      <div class="small muted">Created {{ r.created_at|int|datetimeformat if r.created_at else '-' }}</div>
-      {% if r.notes or r.manual_text %}<div class="small muted">{{ (r.notes or r.manual_text or '-')[:160] }}</div>{% endif %}
-    </div>
-    <div class="doc-meta">
-      <div><strong>Source</strong></div>
-      <div>{{ r.source_label or ('#' ~ r.source_id) }}</div>
-      {% if r.company_label %}<div class="small muted">{{ r.company_label }}</div>{% endif %}
-    </div>
-    <div class="doc-meta">
-      <div><strong>Entry</strong></div>
-      <div>{{ r.entry_mode or '-' }}</div>
-      {% if r.original_name and r.original_name != r.title %}<div class="small muted">{{ r.original_name }}</div>{% endif %}
-    </div>
-    <div class="doc-meta">
-      <div><strong>Owner</strong></div>
-      <div>{{ r.created_by or '-' }}</div>
-    </div>
-    <div class="doc-actions">
-      {% if r.source_url %}<a class="btn btn-secondary" href="{{ r.source_url }}">Open source</a>{% endif %}
-      {% if r.file_url %}<a class="btn" href="{{ r.file_url }}" target="_blank">Open file</a>{% endif %}
-    </div>
-  </div>
-{% else %}
-  <div class="card">No documents found.</div>
-{% endfor %}
-</div>
+<tr>
+<td>{{ r.doc_type }}</td>
+<td>{{ r.title or '-' }}</td>
+<td>{{ r.source_type }} · {{ r.source_label or ('#' ~ r.source_id) }}</td>
+<td>{{ r.company_label or '-' }}</td>
+<td>{{ r.entry_mode }}</td>
+<td>
+  {% if r.filename %}
+    {% set fn = r.filename %}
+    {% if r.source_type == 'shipment' %}
+      <a href="/uploads/shipments/{{ fn }}" target="_blank">Open file</a>
+    {% elif r.source_type == 'client_invoice' or r.doc_type == 'invoice' %}
+      <a href="/uploads/clients/{{ fn }}" target="_blank">Open file</a>
+    {% else %}
+      <a href="/uploads/tasks/{{ fn }}" target="_blank">Open file</a>
+    {% endif %}
+  {% else %}
+    <div class="muted small">{{ (r.manual_text or r.notes or '-')[:120] }}</div>
+  {% endif %}
+</td>
+<td>{{ r.created_at|int|datetimeformat if r.created_at else '-' }}</td>
+</tr>
+{% else %}<tr><td colspan="7">No documents found.</td></tr>{% endfor %}
+</table></div>
 {% endblock %}

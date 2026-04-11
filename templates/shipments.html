@@ -1,11 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
 <style>
-.kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
-.mini-kpi{padding:16px;border:1px solid rgba(242,197,108,.14);border-radius:16px;background:linear-gradient(180deg,rgba(32,17,12,.96),rgba(49,27,18,.94));color:#fff4e8}
-.wizard-note{padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid rgba(242,197,108,.16);color:#fff0da}
-.shipment-table td{vertical-align:top}
-.shipment-table .meta{font-size:12px;color:#d8c0a1}
+.kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.mini-kpi{padding:16px;border:1px solid #eadfcd;border-radius:16px;background:#fff}.wizard-note{padding:14px 16px;border-radius:14px;background:#fff7ec;border:1px solid #f3dcb5;color:#694c14}.shipment-table td{vertical-align:top}.shipment-table .meta{font-size:12px;color:#7b6a58}
 @media(max-width:900px){.kpi-grid{grid-template-columns:1fr 1fr}.shipment-table{display:block;overflow:auto}}
 </style>
 <div class="topbar"><div><h1>Shipments</h1><div class="muted small">Simple shipment-first workflow: create shipment, add customer deals, then generate all documents.</div></div><div class="row"><a class="btn btn-secondary" href="/shipments/dashboard">Operations Dashboard</a><a class="btn" href="/export/deals">Customer Deals</a></div></div>
@@ -83,7 +79,7 @@
       <td><span class="badge">{{ r.current_status }}</span><div class="meta">{{ r.meta.summary }}</div></td>
       <td><a class="btn" href="/shipment/{{ r.id }}">Open Shipment</a></td>
     </tr>
-    {% endfor %}
+    {% else %}<tr><td colspan="5" class="muted">No shipments yet.</td></tr>{% endfor %}
   </table>
 </div>
 {% endblock %}
