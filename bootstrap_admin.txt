@@ -1,0 +1,5 @@
+TradeFlow CRM bootstrap admin account
+username: admin
+password: TF-8cec05f314
+
+Rotate this password immediately after first login or set INITIAL_ADMIN_PASSWORD in the environment.

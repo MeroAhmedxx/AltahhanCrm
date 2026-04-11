@@ -26,7 +26,6 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional, Any
-from types import SimpleNamespace
 from datetime import datetime, timedelta
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -2194,9 +2193,6 @@ def dashboard(request: Request):
     user = require_login(request)
     ensure_due_notifications(user.username)
     now = time.time()
-    day_end = now + 86400
-    week_end = now + 7 * 86400
-    month_start = now - 30 * 86400
     is_admin = user.role == 'admin'
     lead_filter = '' if is_admin else ' AND created_by=:username'
     activity_sql = 'SELECT * FROM activity_logs ORDER BY id DESC LIMIT 12' if is_admin else 'SELECT * FROM activity_logs WHERE username=:username ORDER BY id DESC LIMIT 12'
@@ -2215,74 +2211,11 @@ def dashboard(request: Request):
             "avg_score": conn.execute(text(f"SELECT COALESCE(AVG(score),0) FROM leads WHERE 1=1{lead_filter}"), params).scalar() or 0,
             "shipments_open": conn.execute(text("SELECT COUNT(*) FROM shipments WHERE current_status NOT IN ('Delivered','Closed')"), {}).scalar() or 0,
             "shipments_delayed": conn.execute(text("SELECT COUNT(*) FROM shipments WHERE eta_at > 0 AND eta_at < :t AND current_status NOT IN ('Delivered','Closed')"), params).scalar() or 0,
-            "arriving_soon": conn.execute(text("SELECT COUNT(*) FROM shipments WHERE eta_at > :t AND eta_at <= :soon AND current_status NOT IN ('Delivered','Closed')"), {"t": now, "soon": week_end}).scalar() or 0,
+            "arriving_soon": conn.execute(text("SELECT COUNT(*) FROM shipments WHERE eta_at > :t AND eta_at <= :soon AND current_status NOT IN ('Delivered','Closed')"), {"t": now, "soon": now + 7*86400}).scalar() or 0,
             "missing_docs": conn.execute(text("SELECT COUNT(*) FROM shipments s WHERE current_status NOT IN ('Delivered','Closed') AND (SELECT COUNT(*) FROM shipment_documents d WHERE d.shipment_id=s.id AND d.doc_type IN ('invoice','packing_list')) < 2"), {}).scalar() or 0,
             "followups_total_due": conn.execute(text("SELECT COUNT(*) FROM followups WHERE status IN ('Open','Waiting') AND followup_at > 0 AND followup_at <= :t"), params).scalar() or 0,
-            "shipments_this_week": conn.execute(text("SELECT COUNT(*) FROM shipments WHERE (etd_at > :t AND etd_at <= :week_end) OR (eta_at > :t AND eta_at <= :week_end)"), {"t": now, "week_end": week_end}).scalar() or 0,
-            "tasks_due_today": conn.execute(text("SELECT COUNT(*) FROM tasks WHERE status != 'Done' AND due_at > 0 AND due_at <= :day_end AND (assigned_to=:username OR created_by=:username OR assigned_to='__all__')"), {"username": user.username, "day_end": day_end}).scalar() or 0,
-            "docs_generated_30d": conn.execute(text("SELECT COALESCE((SELECT COUNT(*) FROM shipment_documents WHERE created_at >= :since),0) + COALESCE((SELECT COUNT(*) FROM deal_documents WHERE created_at >= :since),0)"), {"since": month_start}).scalar() or 0,
         }
         stats["conversion_rate"] = round((stats["won"] / stats["leads"] * 100), 1) if stats["leads"] else 0
-        finance_totals = conn.execute(text("""
-            SELECT
-                COALESCE(SUM(d.total_amount),0) AS total_amount,
-                COALESCE((SELECT SUM(amount) FROM deal_payments),0) AS paid_amount,
-                COUNT(*) AS deals_count
-            FROM shipment_deals d
-        """
-        )).mappings().first() or {}
-        total_deal_amount = float(finance_totals.get('total_amount') or 0)
-        total_paid_amount = float(finance_totals.get('paid_amount') or 0)
-        status_counts = {'Paid': 0, 'Partial': 0, 'Unpaid': 0, 'Overdue': 0, 'Draft': 0}
-        status_amounts = {'Paid': 0.0, 'Partial': 0.0, 'Unpaid': 0.0, 'Overdue': 0.0, 'Draft': 0.0}
-        overdue_deals = []
-        deal_rows = conn.execute(text("""
-            SELECT d.*, s.shipment_no, s.current_status AS shipment_status
-            FROM shipment_deals d
-            LEFT JOIN shipments s ON s.id=d.shipment_id
-            ORDER BY d.id DESC
-        """)).fetchall()
-        for d in deal_rows:
-            snap = build_deal_payment_snapshot(conn, d)
-            remaining = float(snap.get('remaining_amount') or 0)
-            state = snap.get('payment_status') or 'Draft'
-            status_counts[state] = status_counts.get(state, 0) + 1
-            amount_bucket = float(getattr(d, 'total_amount', 0) or 0) if state == 'Paid' else remaining
-            status_amounts[state] = round(status_amounts.get(state, 0.0) + amount_bucket, 2)
-            if state == 'Overdue':
-                overdue_deals.append({
-                    'id': d.id,
-                    'client_name': getattr(d, 'client_name', '') or '-',
-                    'shipment_no': getattr(d, 'shipment_no', '') or '-',
-                    'invoice_no': getattr(d, 'invoice_no', '') or '-',
-                    'maturity_date': getattr(d, 'maturity_date', '') or '',
-                    'remaining_amount': remaining,
-                    'currency': getattr(d, 'currency', '') or 'USD',
-                    'paid_pct': snap.get('paid_pct', 0),
-                })
-        overdue_deals = sorted(overdue_deals, key=lambda x: (x.get('maturity_date') or '9999-99-99', -(x.get('remaining_amount') or 0)))[:8]
-        recent_payments = conn.execute(text("""
-            SELECT p.*, d.client_name, d.invoice_no, d.currency, d.shipment_id, s.shipment_no
-            FROM deal_payments p
-            JOIN shipment_deals d ON d.id=p.deal_id
-            LEFT JOIN shipments s ON s.id=d.shipment_id
-            ORDER BY p.id DESC LIMIT 8
-        """)).fetchall()
-        top_clients = conn.execute(text("""
-            SELECT
-                d.client_name,
-                COUNT(*) AS deals_count,
-                COUNT(DISTINCT d.shipment_id) AS shipments_count,
-                COALESCE(SUM(d.total_amount),0) AS total_amount,
-                COALESCE(SUM((SELECT COALESCE(SUM(p.amount),0) FROM deal_payments p WHERE p.deal_id=d.id)),0) AS paid_amount,
-                COALESCE(SUM(s.container_count),0) AS container_count
-            FROM shipment_deals d
-            LEFT JOIN shipments s ON s.id=d.shipment_id
-            WHERE COALESCE(d.client_name,'') != ''
-            GROUP BY d.client_name
-            ORDER BY total_amount DESC, shipments_count DESC
-            LIMIT 6
-        """)).mappings().all()
         stage_summary = conn.execute(text(f"SELECT stage, COUNT(*) AS cnt, COALESCE(SUM(estimated_value),0) AS total FROM leads WHERE 1=1{lead_filter} GROUP BY stage ORDER BY cnt DESC, stage ASC"), params).fetchall()
         hot = conn.execute(text(f"""
         SELECT
@@ -2296,33 +2229,11 @@ def dashboard(request: Request):
         """), params).fetchall()
         recent_notifications = conn.execute(text(f"SELECT * FROM notifications WHERE {notification_where_sql()} ORDER BY id DESC LIMIT 8"), {"username": user.username}).fetchall()
         recent_activity = conn.execute(text(activity_sql), {"username": user.username}).fetchall()
-        upcoming_tasks = conn.execute(text("SELECT * FROM tasks WHERE assigned_to=:username OR created_by=:username OR assigned_to='__all__' ORDER BY CASE WHEN status='Done' THEN 1 ELSE 0 END, CASE WHEN due_at > 0 THEN due_at ELSE 32503680000 END ASC, id DESC LIMIT 8"), params).fetchall()
+        upcoming_tasks = conn.execute(text("SELECT * FROM tasks WHERE assigned_to=:username OR created_by=:username ORDER BY CASE WHEN status='Done' THEN 1 ELSE 0 END, CASE WHEN due_at > 0 THEN due_at ELSE 32503680000 END ASC, id DESC LIMIT 8"), params).fetchall()
         my_tasks = conn.execute(text("SELECT * FROM tasks WHERE (assigned_to=:username OR assigned_to='__all__') ORDER BY CASE WHEN status='Done' THEN 1 ELSE 0 END, CASE WHEN due_at > 0 THEN due_at ELSE 32503680000 END ASC, id DESC LIMIT 6"), params).fetchall()
         shipment_rows = conn.execute(text("SELECT * FROM shipments ORDER BY CASE WHEN current_status IN ('Delivered','Closed') THEN 1 ELSE 0 END, CASE WHEN eta_at > 0 THEN eta_at ELSE 32503680000 END ASC, id DESC LIMIT 6"), {}).fetchall()
         overdue_followups = conn.execute(text("SELECT * FROM followups WHERE status IN ('Open','Waiting') AND followup_at > 0 AND followup_at <= :t ORDER BY followup_at ASC LIMIT 8"), params).fetchall()
-
-    finance = {
-        'deals_total': round(total_deal_amount, 2),
-        'paid_total': round(total_paid_amount, 2),
-        'outstanding_total': round(max(total_deal_amount - total_paid_amount, 0), 2),
-        'collection_rate': round((total_paid_amount / total_deal_amount) * 100, 1) if total_deal_amount else 0,
-        'deals_count': int(finance_totals.get('deals_count') or 0),
-        'paid_count': status_counts['Paid'],
-        'partial_count': status_counts['Partial'],
-        'unpaid_count': status_counts['Unpaid'],
-        'overdue_count': status_counts['Overdue'],
-        'draft_count': status_counts['Draft'],
-        'overdue_amount': round(status_amounts['Overdue'], 2),
-        'partial_amount': round(status_amounts['Partial'], 2),
-        'unpaid_amount': round(status_amounts['Unpaid'], 2),
-    }
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request, "username": user.username, "user": user, "stats": stats, "hot": hot,
-        "recent_notifications": recent_notifications, "recent_activity": recent_activity, "stage_summary": stage_summary,
-        "upcoming_tasks": upcoming_tasks, "my_tasks": my_tasks, "shipment_rows": shipment_rows,
-        "overdue_followups": overdue_followups, "latest_notification_id": latest_notification_id_for_user(user.username),
-        "finance": finance, "recent_payments": recent_payments, "overdue_deals": overdue_deals, "top_clients": top_clients,
-    })
+    return templates.TemplateResponse("dashboard.html", {"request": request, "username": user.username, "user": user, "stats": stats, "hot": hot, "recent_notifications": recent_notifications, "recent_activity": recent_activity, "stage_summary": stage_summary, "upcoming_tasks": upcoming_tasks, "my_tasks": my_tasks, "shipment_rows": shipment_rows, "overdue_followups": overdue_followups, "latest_notification_id": latest_notification_id_for_user(user.username)})
 
 
 @app.get("/leads", response_class=HTMLResponse)
@@ -2631,6 +2542,130 @@ def current_client_detail(request: Request, client_id: int):
     })
 
 
+@app.get("/api/v1/clients/{client_id}")
+def api_client_detail(request: Request, client_id: int):
+    require_login(request)
+    with engine.begin() as conn:
+        client = conn.execute(text("SELECT * FROM current_clients WHERE id=:id"), {'id': client_id}).fetchone()
+        if not client:
+            raise HTTPException(status_code=404, detail='Client not found')
+    data = dict(client._mapping)
+    data['label'] = _text(data.get('company_en')) or _text(data.get('company_ar')) or _text(data.get('customer_code'))
+    return JSONResponse(data)
+
+
+@app.get("/api/v1/deals/{deal_id}/readiness")
+def api_deal_readiness(request: Request, deal_id: int):
+    require_login(request)
+    with engine.begin() as conn:
+        deal = conn.execute(text('SELECT * FROM shipment_deals WHERE id=:id'), {'id': deal_id}).fetchone()
+        if not deal:
+            raise HTTPException(status_code=404, detail='Deal not found')
+        shipment = conn.execute(text('SELECT * FROM shipments WHERE id=:id'), {'id': deal.shipment_id}).fetchone()
+        items = fetch_deal_items(conn, deal_id)
+        issues = build_deal_validation(conn, deal, shipment, items)
+        payment = build_deal_payment_snapshot(conn, deal)
+    return JSONResponse({
+        'ok': len(issues) == 0,
+        'issues': issues,
+        'items_count': len(items),
+        'payment': payment,
+        'deal_id': deal_id,
+        'shipment_id': int(getattr(deal, 'shipment_id', 0) or 0),
+    })
+
+
+@app.get("/api/v1/shipments/{shipment_id}/summary")
+def api_shipment_summary(request: Request, shipment_id: int):
+    require_login(request)
+    with engine.begin() as conn:
+        shipment = conn.execute(text('SELECT * FROM shipments WHERE id=:id'), {'id': shipment_id}).fetchone()
+        if not shipment:
+            raise HTTPException(status_code=404, detail='Shipment not found')
+        raw_deals = conn.execute(text('SELECT * FROM shipment_deals WHERE shipment_id=:id ORDER BY id DESC'), {'id': shipment_id}).fetchall()
+        deals = []
+        for d in raw_deals:
+            row = dict(d._mapping)
+            row.update(build_deal_payment_snapshot(conn, d))
+            deals.append(row)
+        finance = build_shipment_finance_snapshot(conn, shipment_id)
+    return JSONResponse({
+        'shipment': dict(shipment._mapping),
+        'meta': shipment_status_meta(shipment),
+        'finance': finance,
+        'deals': deals,
+    })
+
+
+@app.get("/api/v1/fx")
+def api_fx_rate(request: Request, base_currency: str = 'USD', quote_currency: str = 'EUR'):
+    require_login(request)
+    base_currency = (base_currency or 'USD').upper().strip()[:3]
+    quote_currency = (quote_currency or 'EUR').upper().strip()[:3]
+    url = f'https://api.frankfurter.app/latest?from={base_currency}&to={quote_currency}'
+    try:
+        with httpx.Client(timeout=8.0) as client:
+            resp = client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+        rate = float((data.get('rates') or {}).get(quote_currency) or 0)
+        return JSONResponse({'base': base_currency, 'quote': quote_currency, 'rate': rate, 'source': 'frankfurter'})
+    except Exception as exc:
+        return JSONResponse({'base': base_currency, 'quote': quote_currency, 'rate': 0, 'error': str(exc)[:180]}, status_code=502)
+
+
+@app.get('/ai-hub', response_class=HTMLResponse)
+def ai_hub_page(request: Request,
+                product_name: str = '',
+                target_country: str = '',
+                buyer_type: str = '',
+                goal: str = 'Open a new export conversation',
+                tone: str = 'professional',
+                deal_id: int = 0,
+                fx_base: str = 'USD',
+                fx_quote: str = 'EUR'):
+    user = require_login(request)
+    export_result = None
+    readiness = None
+    fx_result = None
+    if product_name or target_country or buyer_type:
+        export_result = generate_export_agent_content(product_name, target_country, buyer_type, goal, tone)
+    if int(deal_id or 0) > 0:
+        with engine.begin() as conn:
+            deal = conn.execute(text('SELECT * FROM shipment_deals WHERE id=:id'), {'id': int(deal_id)}).fetchone()
+            if deal:
+                shipment = conn.execute(text('SELECT * FROM shipments WHERE id=:id'), {'id': deal.shipment_id}).fetchone()
+                items = fetch_deal_items(conn, int(deal_id))
+                readiness = {
+                    'deal': deal,
+                    'issues': build_deal_validation(conn, deal, shipment, items),
+                    'payment': build_deal_payment_snapshot(conn, deal),
+                    'items_count': len(items),
+                }
+    try:
+        with httpx.Client(timeout=6.0) as client:
+            resp = client.get(f'https://api.frankfurter.app/latest?from={(fx_base or "USD").upper()}&to={(fx_quote or "EUR").upper()}')
+            if resp.status_code == 200:
+                payload = resp.json()
+                fx_result = {
+                    'base': (fx_base or 'USD').upper(),
+                    'quote': (fx_quote or 'EUR').upper(),
+                    'rate': float((payload.get('rates') or {}).get((fx_quote or 'EUR').upper()) or 0),
+                }
+    except Exception:
+        fx_result = None
+    with engine.begin() as conn:
+        deal_rows = conn.execute(text("SELECT id, invoice_no, client_name FROM shipment_deals ORDER BY id DESC LIMIT 100")).fetchall()
+    return templates.TemplateResponse('ai_hub.html', {
+        'request': request, 'username': user.username, 'user': user,
+        'export_result': export_result, 'readiness': readiness, 'deal_rows': deal_rows,
+        'product_name': product_name, 'target_country': target_country, 'buyer_type': buyer_type,
+        'goal': goal, 'tone': tone, 'deal_id': int(deal_id or 0),
+        'fx_base': fx_base, 'fx_quote': fx_quote, 'fx_result': fx_result,
+        'title': 'AI + API Hub', 'latest_notification_id': latest_notification_id_for_user(user.username)
+    })
+
+
 @app.post("/current-clients/add")
 def current_clients_add(request: Request, customer_code: str = Form(''), country: str = Form(''), company_ar: str = Form(''), company_en: str = Form(...), address: str = Form(''), ice: str = Form(''), bank_name: str = Form(''), bank_address: str = Form(''), swift_code: str = Form(''), postal_code: str = Form(''), iban_account: str = Form('')):
     user = require_login(request)
@@ -2725,11 +2760,10 @@ def agreement_detail(request: Request, item_id: int):
 
 
 @app.get("/reports", response_class=HTMLResponse)
-def reports_page(request: Request, period: str = 'month', payment_status: str = '', client_q: str = ''):
+def reports_page(request: Request, period: str = 'month'):
     user = require_login(request)
     days = 7 if period == 'week' else 30 if period == 'month' else 90 if period == 'quarter' else 365
     since = time.time() - days * 86400
-    client_q_text = _text(client_q).lower()
     with engine.begin() as conn:
         summary = conn.execute(text("""
             SELECT
@@ -2775,73 +2809,6 @@ def reports_page(request: Request, period: str = 'month', payment_status: str = 
             ORDER BY created_at DESC, id DESC
             LIMIT 50
         """), {'s': since}).fetchall()
-        finance_summary = conn.execute(text("""
-            SELECT
-                COUNT(*) AS deals_count,
-                COALESCE(SUM(d.total_amount),0) AS deals_total,
-                COALESCE((SELECT SUM(amount) FROM deal_payments p JOIN shipment_deals d2 ON d2.id=p.deal_id WHERE d2.created_at >= :s),0) AS paid_total
-            FROM shipment_deals d
-            WHERE d.created_at >= :s
-        """), {'s': since}).fetchone()
-        customer_finance_rows = conn.execute(text("""
-            SELECT
-                COALESCE(d.client_name, 'Unknown') AS client_name,
-                COUNT(*) AS deals_count,
-                COALESCE(SUM(d.total_amount),0) AS deals_total,
-                COALESCE(SUM((SELECT COALESCE(SUM(p.amount),0) FROM deal_payments p WHERE p.deal_id=d.id)),0) AS paid_total
-            FROM shipment_deals d
-            WHERE d.created_at >= :s
-            GROUP BY COALESCE(d.client_name, 'Unknown')
-            ORDER BY deals_total DESC
-            LIMIT 25
-        """), {'s': since}).fetchall()
-        payment_rows = conn.execute(text("""
-            SELECT d.id, d.invoice_no, d.client_name, d.total_amount, d.currency, d.maturity_date, d.status,
-                   COALESCE((SELECT SUM(p.amount) FROM deal_payments p WHERE p.deal_id=d.id),0) AS paid_amount,
-                   s.shipment_no
-            FROM shipment_deals d
-            LEFT JOIN shipments s ON s.id=d.shipment_id
-            WHERE d.created_at >= :s
-            ORDER BY d.id DESC
-            LIMIT 200
-        """), {'s': since}).fetchall()
-        shipment_finance_rows = conn.execute(text("""
-            SELECT
-                s.id AS shipment_id,
-                s.shipment_no,
-                s.company,
-                s.container_type,
-                s.current_status,
-                s.etd_at,
-                s.eta_at,
-                COALESCE(SUM(d.total_amount),0) AS deals_total,
-                COALESCE((SELECT SUM(p.amount) FROM deal_payments p JOIN shipment_deals d2 ON d2.id=p.deal_id WHERE d2.shipment_id=s.id),0) AS paid_total,
-                MAX(s.container_count) AS containers
-            FROM shipments s
-            LEFT JOIN shipment_deals d ON d.shipment_id=s.id
-            WHERE s.created_at >= :s
-            GROUP BY s.id, s.shipment_no, s.company, s.container_type, s.current_status, s.etd_at, s.eta_at
-            ORDER BY deals_total DESC, s.id DESC
-            LIMIT 50
-        """), {'s': since}).fetchall()
-        container_detail_rows = conn.execute(text("""
-            SELECT
-                s.shipment_no,
-                COALESCE(cc.company_en, s.company, 'Unknown') AS customer_name,
-                COALESCE(NULLIF(s.item_name,''), NULLIF(s.product_name,''), 'Unknown') AS item_name,
-                s.container_count,
-                s.container_type,
-                s.current_status,
-                s.etd_at,
-                s.eta_at,
-                s.invoice_amount,
-                s.currency
-            FROM shipments s
-            LEFT JOIN current_clients cc ON cc.id=s.client_id
-            WHERE s.created_at >= :s
-            ORDER BY s.id DESC
-            LIMIT 100
-        """), {'s': since}).fetchall()
     total_amount = float(getattr(summary, 'total_invoice_amount', 0) or 0)
     total_containers = float(getattr(summary, 'total_containers', 0) or 0)
     total_cartons = float(getattr(summary, 'total_cartons', 0) or 0)
@@ -2857,76 +2824,13 @@ def reports_page(request: Request, period: str = 'month', payment_status: str = 
         m['amount_pct'] = round((float(m.get('total_invoice_amount') or 0) / total_amount * 100), 2) if total_amount else 0
         m['cartons_pct'] = round((float(m.get('total_cartons') or 0) / total_cartons * 100), 2) if total_cartons else 0
         products.append(m)
-    finance = {
-        'deals_count': int(getattr(finance_summary, 'deals_count', 0) or 0),
-        'deals_total': float(getattr(finance_summary, 'deals_total', 0) or 0),
-        'paid_total': float(getattr(finance_summary, 'paid_total', 0) or 0),
-    }
-    finance['remaining_total'] = round(max(finance['deals_total'] - finance['paid_total'], 0), 2)
-    finance['paid_pct'] = round((finance['paid_total'] / finance['deals_total']) * 100, 2) if finance['deals_total'] else 0
-    customer_finance = []
-    for r in customer_finance_rows:
-        m = dict(r._mapping)
-        if client_q_text and client_q_text not in _text(m.get('client_name')).lower():
-            continue
-        m['remaining_total'] = round(max(float(m.get('deals_total') or 0) - float(m.get('paid_total') or 0), 0), 2)
-        customer_finance.append(m)
-    payment_book = []
-    status_counts = {'Paid': 0, 'Partial': 0, 'Unpaid': 0, 'Overdue': 0, 'Draft': 0}
-    status_amounts = {'Paid': 0.0, 'Partial': 0.0, 'Unpaid': 0.0, 'Overdue': 0.0, 'Draft': 0.0}
-    now_ts = time.time()
-    for r in payment_rows:
-        m = dict(r._mapping)
-        remaining_amount = round(max(float(m.get('total_amount') or 0) - float(m.get('paid_amount') or 0), 0), 2)
-        maturity_ts = parse_any_date_to_ts(m.get('maturity_date') or '')
-        if float(m.get('total_amount') or 0) <= 0:
-            payment_state = 'Draft'
-        elif remaining_amount <= 0.009:
-            payment_state = 'Paid'
-        elif float(m.get('paid_amount') or 0) > 0:
-            payment_state = 'Partial'
-        elif maturity_ts and maturity_ts < now_ts:
-            payment_state = 'Overdue'
-        else:
-            payment_state = 'Unpaid'
-        m['remaining_amount'] = remaining_amount
-        m['payment_status'] = payment_state
-        status_counts[payment_state] = status_counts.get(payment_state, 0) + 1
-        status_amounts[payment_state] = round(status_amounts.get(payment_state, 0.0) + remaining_amount, 2)
-        if payment_status and payment_state != payment_status:
-            continue
-        if client_q_text and client_q_text not in _text(m.get('client_name')).lower() and client_q_text not in _text(m.get('shipment_no')).lower():
-            continue
-        payment_book.append(m)
-    finance['status_counts'] = status_counts
-    finance['status_amounts'] = status_amounts
-    finance['overdue_count'] = status_counts['Overdue']
-    finance['unpaid_count'] = status_counts['Unpaid']
-    finance['partial_count'] = status_counts['Partial']
-    finance['paid_count'] = status_counts['Paid']
-    finance['draft_count'] = status_counts['Draft']
-    finance['overdue_amount'] = status_amounts['Overdue']
-    finance['open_amount'] = round(status_amounts['Overdue'] + status_amounts['Unpaid'] + status_amounts['Partial'], 2)
-    shipment_finance = []
-    for r in shipment_finance_rows:
-        m = dict(r._mapping)
-        if client_q_text and client_q_text not in _text(m.get('company')).lower() and client_q_text not in _text(m.get('shipment_no')).lower():
-            continue
-        m['remaining_total'] = round(max(float(m.get('deals_total') or 0) - float(m.get('paid_total') or 0), 0), 2)
-        shipment_finance.append(m)
-    container_book = []
-    for r in container_detail_rows:
-        m = dict(r._mapping)
-        if client_q_text and client_q_text not in _text(m.get('customer_name')).lower() and client_q_text not in _text(m.get('shipment_no')).lower() and client_q_text not in _text(m.get('item_name')).lower():
-            continue
-        container_book.append(m)
     return templates.TemplateResponse('reports.html', {
         'request': request, 'username': user.username, 'user': user, 'period': period,
         'summary': summary, 'customers': customers, 'products': products, 'bookings': booking_rows,
-        'finance': finance, 'customer_finance': customer_finance, 'payment_book': payment_book, 'shipment_finance': shipment_finance, 'container_book': container_book,
-        'payment_status_filter': payment_status, 'client_q': client_q,
         'latest_notification_id': latest_notification_id_for_user(user.username)
     })
+
+
 @app.get("/reports/export")
 def reports_export(request: Request, period: str = 'week'):
     user = require_login(request)
@@ -2944,10 +2848,8 @@ def reports_export(request: Request, period: str = 'week'):
             ['Invoices', conn.execute(text("SELECT COUNT(*) FROM client_invoices WHERE created_at >= :s"), {'s': since}).scalar() or 0],
             ['Chat Messages', conn.execute(text("SELECT COUNT(*) FROM chat_messages WHERE created_at >= :s"), {'s': since}).scalar() or 0],
             ['Activity Logs', conn.execute(text("SELECT COUNT(*) FROM activity_logs WHERE created_at >= :s"), {'s': since}).scalar() or 0],
-            ['Trade Agreements', conn.execute(text("SELECT COUNT(*) FROM trade_reference_items WHERE category='agreement'" )).scalar() or 0],
-            ['Trade Laws & Resources', conn.execute(text("SELECT COUNT(*) FROM trade_reference_items WHERE category='law'" )).scalar() or 0],
-            ['Deals Total', conn.execute(text("SELECT COALESCE(SUM(total_amount),0) FROM shipment_deals WHERE created_at >= :s"), {'s': since}).scalar() or 0],
-            ['Payments Total', conn.execute(text("SELECT COALESCE(SUM(amount),0) FROM deal_payments WHERE created_at >= :s"), {'s': since}).scalar() or 0],
+            ['Trade Agreements', conn.execute(text("SELECT COUNT(*) FROM trade_reference_items WHERE category='agreement'")).scalar() or 0],
+            ['Trade Laws & Resources', conn.execute(text("SELECT COUNT(*) FROM trade_reference_items WHERE category='law'")).scalar() or 0],
         ]
         for r in rows:
             ws.append(r)
@@ -2965,65 +2867,13 @@ def reports_export(request: Request, period: str = 'week'):
         """), {'s': since}).fetchall()
         for r in team:
             ws2.append([r.username, r.tasks_count, r.leads_count, r.clients_count, r.invoices_count, r.messages_count, r.actions_count])
-        ws3 = wb.create_sheet('Payments')
-        ws3.append(['Invoice', 'Client', 'Shipment', 'Total Amount', 'Paid Amount', 'Remaining', 'Status', 'Maturity Date'])
-        payment_rows = conn.execute(text("""
-            SELECT d.invoice_no, d.client_name, s.shipment_no, d.total_amount, d.maturity_date,
-                   COALESCE((SELECT SUM(p.amount) FROM deal_payments p WHERE p.deal_id=d.id),0) AS paid_amount
-            FROM shipment_deals d
-            LEFT JOIN shipments s ON s.id=d.shipment_id
-            WHERE d.created_at >= :s
-            ORDER BY d.id DESC
-        """), {'s': since}).fetchall()
-        now_ts = time.time()
-        for r in payment_rows:
-            total_amount = float(r.total_amount or 0)
-            paid_amount = float(r.paid_amount or 0)
-            remaining = round(max(total_amount - paid_amount, 0), 2)
-            maturity_ts = parse_any_date_to_ts(r.maturity_date or '')
-            if total_amount <= 0:
-                payment_status = 'Draft'
-            elif remaining <= 0.009:
-                payment_status = 'Paid'
-            elif paid_amount > 0:
-                payment_status = 'Partial'
-            elif maturity_ts and maturity_ts < now_ts:
-                payment_status = 'Overdue'
-            else:
-                payment_status = 'Unpaid'
-            ws3.append([r.invoice_no, r.client_name, r.shipment_no, total_amount, paid_amount, remaining, payment_status, r.maturity_date])
-        ws4 = wb.create_sheet('Shipment Finance')
-        ws4.append(['Shipment', 'Customer', 'Deals Total', 'Paid Total', 'Remaining', 'Containers'])
-        shipment_rows = conn.execute(text("""
-            SELECT s.shipment_no, s.company,
-                   COALESCE(SUM(d.total_amount),0) AS deals_total,
-                   COALESCE((SELECT SUM(p.amount) FROM deal_payments p JOIN shipment_deals d2 ON d2.id=p.deal_id WHERE d2.shipment_id=s.id),0) AS paid_total,
-                   MAX(s.container_count) AS containers
-            FROM shipments s
-            LEFT JOIN shipment_deals d ON d.shipment_id=s.id
-            WHERE s.created_at >= :s
-            GROUP BY s.id, s.shipment_no, s.company
-            ORDER BY deals_total DESC, s.id DESC
-        """), {'s': since}).fetchall()
-        for r in shipment_rows:
-            ws4.append([r.shipment_no, r.company, float(r.deals_total or 0), float(r.paid_total or 0), round(max(float(r.deals_total or 0) - float(r.paid_total or 0), 0), 2), float(r.containers or 0)])
-        ws5 = wb.create_sheet('Container Detail')
-        ws5.append(['Shipment', 'Customer', 'Item', 'Containers', 'Container Type', 'Status', 'ETD', 'ETA', 'Invoice Amount', 'Currency'])
-        container_rows = conn.execute(text("""
-            SELECT s.shipment_no, COALESCE(cc.company_en, s.company, 'Unknown') AS customer_name,
-                   COALESCE(NULLIF(s.item_name,''), NULLIF(s.product_name,''), 'Unknown') AS item_name,
-                   s.container_count, s.container_type, s.current_status, s.etd_at, s.eta_at, s.invoice_amount, s.currency
-            FROM shipments s
-            LEFT JOIN current_clients cc ON cc.id=s.client_id
-            WHERE s.created_at >= :s
-            ORDER BY s.id DESC
-        """), {'s': since}).fetchall()
-        for r in container_rows:
-            ws5.append([r.shipment_no, r.customer_name, r.item_name, r.container_count, r.container_type, r.current_status, format_date(r.etd_at), format_date(r.eta_at), float(r.invoice_amount or 0), r.currency])
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
     return StreamingResponse(buf, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', headers={'Content-Disposition': f'attachment; filename=altahhan_report_{period}.xlsx'})
+
+
+
 @app.get("/users", response_class=HTMLResponse)
 def users_page(request: Request):
     user = require_admin(request)
@@ -4335,53 +4185,15 @@ def shipment_detail(request: Request, shipment_id: int):
         if not shipment:
             return redirect('/shipments?error=shipment_not_found')
         docs = conn.execute(text("SELECT * FROM shipment_documents WHERE shipment_id=:id ORDER BY id DESC"), {'id': shipment_id}).fetchall()
-        raw_deals = conn.execute(text("SELECT * FROM shipment_deals WHERE shipment_id=:id ORDER BY id DESC"), {'id': shipment_id}).fetchall()
-        deals = []
-        deal_ids = []
-        for d in raw_deals:
-            m = dict(d._mapping)
-            m.update(build_deal_payment_snapshot(conn, d))
-            deals.append(m)
-            deal_ids.append(int(d.id))
+        deals = conn.execute(text("SELECT * FROM shipment_deals WHERE shipment_id=:id ORDER BY id DESC"), {'id': shipment_id}).fetchall()
         followups = conn.execute(text("SELECT * FROM followups WHERE entity_type='shipment' AND entity_id=:id ORDER BY CASE WHEN status='Done' THEN 1 ELSE 0 END, CASE WHEN followup_at > 0 THEN followup_at ELSE 32503680000 END ASC, id DESC"), {'id': shipment_id}).fetchall()
         users = conn.execute(text("SELECT username, display_name FROM users WHERE is_active=1 ORDER BY username ASC")).fetchall()
         clients = conn.execute(text("SELECT id, company_en, company_ar, customer_code FROM current_clients ORDER BY company_en ASC")).fetchall()
-        product_presets = conn.execute(text("SELECT id, product_name, category, weight_label, packaging FROM export_products ORDER BY category ASC, sort_order ASC, product_name ASC LIMIT 250")).fetchall()
         attachment_rows = conn.execute(text("SELECT * FROM entity_attachments WHERE entity_type='shipment' AND entity_id=:id ORDER BY id DESC"), {'id': shipment_id}).fetchall()
-        finance = build_shipment_finance_snapshot(conn, shipment_id)
-        timeline = conn.execute(text("SELECT * FROM activity_logs WHERE (entity_type='shipment' AND entity_id=:id) OR (entity_type='shipment_deal' AND entity_id IN (SELECT id FROM shipment_deals WHERE shipment_id=:id)) ORDER BY id DESC LIMIT 25"), {'id': shipment_id}).fetchall()
-        overdue_deals = [d for d in deals if (d.get('payment_status') or '').lower() == 'overdue'][:6]
-        missing_docs_count = sum(1 for d in deals if not (d.get('documents_count') or 0))
-        next_followup = followups[0] if followups else None
-        shipment_kpis = {
-            'deals_count': len(deals),
-            'docs_count': len(docs),
-            'attachments_count': len(attachment_rows),
-            'followups_open': sum(1 for f in followups if (getattr(f, 'status', '') or '') != 'Done'),
-            'timeline_count': len(timeline),
-            'missing_docs_count': missing_docs_count,
-        }
     meta = shipment_status_meta(shipment)
-    return templates.TemplateResponse('shipment_detail.html', {
-        'request': request,
-        'username': user.username,
-        'user': user,
-        'shipment': shipment,
-        'meta': meta,
-        'status_steps': status_steps(),
-        'docs': docs,
-        'deals': deals,
-        'followups': followups,
-        'attachments': attachment_rows,
-        'users': users,
-        'clients': clients,
-        'product_presets': product_presets,
-        'finance': finance,
-        'timeline': timeline,
-        'overdue_deals': overdue_deals,
-        'next_followup': next_followup,
-        'shipment_kpis': shipment_kpis,
-    })
+    return templates.TemplateResponse('shipment_detail.html', {'request': request, 'username': user.username, 'user': user, 'shipment': shipment, 'meta': meta, 'status_steps': status_steps(), 'docs': docs, 'deals': deals, 'followups': followups, 'attachments': attachment_rows, 'users': users, 'clients': clients})
+
+
 @app.post('/shipment/{shipment_id}/update')
 def update_shipment(request: Request, shipment_id: int, trade_type: str = Form('Export'), client_id: int = Form(0), company: str = Form(''), supplier: str = Form(''), contact_person: str = Form(''), product_category: str = Form('Dates'), item_name: str = Form(''), product_name: str = Form(''), quantity: float = Form(0), quantity_unit: str = Form('MT'), container_count: int = Form(0), container_type: str = Form('40ft'), cartons_count: int = Form(0), invoice_amount: float = Form(0), currency: str = Form('USD'), origin_port: str = Form(''), destination_port: str = Form(''), vessel_name: str = Form(''), etd_date: str = Form(''), eta_date: str = Form(''), current_status: str = Form('Booked'), notes: str = Form(''), missing_items: str = Form(''), assigned_to: str = Form('')):
     user = require_editor(request)
@@ -4557,11 +4369,10 @@ def client_label_from_mapping(mapping):
     return source_label, company_label
 
 @app.get('/documents', response_class=HTMLResponse)
-def documents_page(request: Request, doc_type: str = '', q: str = '', source_type: str = ''):
+def documents_page(request: Request, doc_type: str = '', q: str = ''):
     user = require_login(request)
     doc_type = (doc_type or '').strip()
     q = (q or '').strip()
-    source_type = (source_type or '').strip()
     rows = []
     with engine.begin() as conn:
         shipment_docs = conn.execute(text("""
@@ -4571,37 +4382,9 @@ def documents_page(request: Request, doc_type: str = '', q: str = '', source_typ
             FROM shipment_documents d
             LEFT JOIN shipments s ON s.id=d.shipment_id
             ORDER BY d.id DESC
-            LIMIT 400
+            LIMIT 300
         """), {}).fetchall()
-        for r in shipment_docs:
-            row = dict(r._mapping)
-            row['source_url'] = f"/shipment/{int(row.get('source_id') or 0)}" if row.get('source_id') else ''
-            row['file_url'] = f"/uploads/shipments/{row['filename']}" if row.get('filename') else ''
-            rows.append(row)
-
-        deal_docs = conn.execute(text("""
-            SELECT dd.id, 'deal' AS source_type, dd.deal_id AS source_id,
-                   dd.document_type AS doc_type,
-                   COALESCE(dd.original_name, dd.filename) AS title,
-                   'file' AS entry_mode,
-                   '' AS manual_text,
-                   dd.filename, dd.original_name,
-                   '' AS notes,
-                   dd.created_by, dd.created_at,
-                   d.invoice_no AS source_label,
-                   COALESCE(d.client_name, '') AS company_label
-            FROM deal_documents dd
-            LEFT JOIN shipment_deals d ON d.id=dd.deal_id
-            ORDER BY dd.id DESC
-            LIMIT 400
-        """), {}).fetchall()
-        for r in deal_docs:
-            row = dict(r._mapping)
-            if not row.get('source_label'):
-                row['source_label'] = f"Deal #{int(row.get('source_id') or 0)}"
-            row['source_url'] = f"/deal/{int(row.get('source_id') or 0)}" if row.get('source_id') else ''
-            row['file_url'] = f"/uploads/export_docs/{row['filename']}" if row.get('filename') else ''
-            rows.append(row)
+        rows.extend([dict(r._mapping) for r in shipment_docs])
 
         try:
             invoice_docs = conn.execute(text("""
@@ -4619,8 +4402,6 @@ def documents_page(request: Request, doc_type: str = '', q: str = '', source_typ
                 source_label, company_label = client_label_from_mapping(row)
                 row['source_label'] = source_label
                 row['company_label'] = company_label
-                row['source_url'] = f"/current-client/{int(row.get('source_id') or 0)}" if row.get('source_id') else ''
-                row['file_url'] = f"/uploads/clients/{row['filename']}" if row.get('filename') else ''
                 rows.append(row)
         except Exception:
             pass
@@ -4635,33 +4416,15 @@ def documents_page(request: Request, doc_type: str = '', q: str = '', source_typ
             ORDER BY ea.id DESC
             LIMIT 300
         """), {}).fetchall()
-        for r in attach_docs:
-            row = dict(r._mapping)
-            row['source_url'] = f"/shipment/{int(row.get('source_id') or 0)}" if row.get('source_type') == 'shipment' else ''
-            row['file_url'] = f"/uploads/tasks/{row['filename']}" if row.get('filename') else ''
-            rows.append(row)
+        rows.extend([dict(r._mapping) for r in attach_docs])
 
     if doc_type:
         rows = [r for r in rows if (r.get('doc_type') or '').lower() == doc_type.lower()]
-    if source_type:
-        rows = [r for r in rows if (r.get('source_type') or '').lower() == source_type.lower()]
     if q:
         qq = q.lower()
         rows = [r for r in rows if qq in str(r.get('title') or '').lower() or qq in str(r.get('source_label') or '').lower() or qq in str(r.get('company_label') or '').lower() or qq in str(r.get('notes') or '').lower()]
     rows.sort(key=lambda r: float(r.get('created_at') or 0), reverse=True)
-    rows = rows[:400]
-    stats = {
-        'total_docs': len(rows),
-        'shipment_docs': sum(1 for r in rows if r.get('source_type') == 'shipment'),
-        'deal_docs': sum(1 for r in rows if r.get('source_type') == 'deal'),
-        'invoice_docs': sum(1 for r in rows if str(r.get('doc_type') or '').lower() in {'invoice', 'invoice_packing'}),
-        'attachment_docs': sum(1 for r in rows if str(r.get('doc_type') or '').lower() == 'attachment'),
-    }
-    return templates.TemplateResponse('documents.html', {
-        'request': request, 'username': user.username, 'user': user, 'rows': rows,
-        'doc_type_filter': doc_type, 'source_type_filter': source_type, 'q': q, 'stats': stats,
-        'latest_notification_id': latest_notification_id_for_user(user.username)
-    })
+    return templates.TemplateResponse('documents.html', {'request': request, 'username': user.username, 'user': user, 'rows': rows[:300], 'doc_type_filter': doc_type, 'q': q, 'latest_notification_id': latest_notification_id_for_user(user.username)})
 
 
 @app.get('/invoices-center', response_class=HTMLResponse)
@@ -4784,98 +4547,6 @@ def load_export_catalog() -> dict:
     return default
 
 
-def normalize_catalog_item(item: dict) -> dict:
-    payload = dict(item or {})
-    payload.setdefault('product_name', '')
-    payload.setdefault('category', '')
-    payload.setdefault('origin_country', '')
-    payload.setdefault('packaging', '')
-    payload.setdefault('price_band', '')
-    payload.setdefault('target_markets', '')
-    payload.setdefault('market_fit', '')
-    payload.setdefault('notes', '')
-    payload.setdefault('sort_order', 0)
-    payload.setdefault('product_line', payload.get('category', ''))
-    payload.setdefault('sku', '')
-    payload.setdefault('weight_label', '')
-    payload.setdefault('pack_size', '')
-    payload.setdefault('flavor', '')
-    payload.setdefault('presentation', '')
-    payload.setdefault('brochure_page', 0)
-    return payload
-
-
-def seed_export_products_from_catalog(conn, force_reset: bool = False) -> int:
-    seed = load_export_catalog()
-    items = [normalize_catalog_item(x) for x in seed.get('products', []) if isinstance(x, dict)]
-    if force_reset:
-        conn.execute(text('DELETE FROM export_products'))
-    inserted = 0
-    now = time.time()
-    for payload in items:
-        row = conn.execute(text("SELECT id FROM export_products WHERE product_name=:product_name AND COALESCE(weight_label,'')=:weight_label LIMIT 1"), {
-            'product_name': payload.get('product_name', '').strip(),
-            'weight_label': payload.get('weight_label', '').strip(),
-        }).fetchone()
-        base = {
-            'product_name': payload.get('product_name', '').strip(),
-            'category': payload.get('category', '').strip(),
-            'origin_country': payload.get('origin_country', '').strip(),
-            'packaging': payload.get('packaging', '').strip(),
-            'price_band': payload.get('price_band', '').strip(),
-            'target_markets': payload.get('target_markets', '').strip(),
-            'market_fit': payload.get('market_fit', '').strip(),
-            'notes': payload.get('notes', '').strip(),
-            'sort_order': int(payload.get('sort_order') or 0),
-            'product_line': payload.get('product_line', '').strip(),
-            'sku': payload.get('sku', '').strip(),
-            'weight_label': payload.get('weight_label', '').strip(),
-            'pack_size': payload.get('pack_size', '').strip(),
-            'flavor': payload.get('flavor', '').strip(),
-            'presentation': payload.get('presentation', '').strip(),
-            'brochure_page': int(payload.get('brochure_page') or 0),
-            'updated_at': now,
-            'created_at': now,
-        }
-        if row:
-            conn.execute(text("""
-                UPDATE export_products
-                SET category=:category, origin_country=:origin_country, packaging=:packaging, price_band=:price_band,
-                    target_markets=:target_markets, market_fit=:market_fit, notes=:notes, sort_order=:sort_order,
-                    product_line=:product_line, sku=:sku, weight_label=:weight_label, pack_size=:pack_size,
-                    flavor=:flavor, presentation=:presentation, brochure_page=:brochure_page, updated_at=:updated_at
-                WHERE id=:id
-            """), {**base, 'id': row.id})
-        else:
-            conn.execute(text("""
-                INSERT INTO export_products
-                (product_name, category, origin_country, packaging, price_band, target_markets, market_fit, notes, sort_order, created_at, updated_at, product_line, sku, weight_label, pack_size, flavor, presentation, brochure_page)
-                VALUES
-                (:product_name, :category, :origin_country, :packaging, :price_band, :target_markets, :market_fit, :notes, :sort_order, :created_at, :updated_at, :product_line, :sku, :weight_label, :pack_size, :flavor, :presentation, :brochure_page)
-            """), base)
-            inserted += 1
-    return inserted
-
-
-def catalog_filters_from_request(request: Request) -> tuple[str, str]:
-    q = (request.query_params.get('q') or '').strip()
-    category = (request.query_params.get('category') or '').strip()
-    return q, category
-
-
-def build_catalog_where(q: str, category: str) -> tuple[str, dict]:
-    clauses = []
-    params = {}
-    if q:
-        clauses.append("(LOWER(product_name) LIKE :q OR LOWER(category) LIKE :q OR LOWER(COALESCE(product_line,'')) LIKE :q OR LOWER(COALESCE(weight_label,'')) LIKE :q OR LOWER(COALESCE(flavor,'')) LIKE :q OR LOWER(COALESCE(notes,'')) LIKE :q)")
-        params['q'] = f"%{q.lower()}%"
-    if category:
-        clauses.append('category = :category')
-        params['category'] = category
-    where = (' WHERE ' + ' AND '.join(clauses)) if clauses else ''
-    return where, params
-
-
 def ensure_export_engine_tables():
     pg = engine.dialect.name == 'postgresql'
     id_col = 'SERIAL PRIMARY KEY' if pg else 'INTEGER PRIMARY KEY AUTOINCREMENT'
@@ -4913,19 +4584,21 @@ def ensure_export_engine_tables():
                 updated_at {real_col} DEFAULT 0
             )
         """))
-        ensure_column(conn, 'export_products', 'product_line', "ALTER TABLE export_products ADD COLUMN product_line TEXT DEFAULT ''", "ALTER TABLE export_products ADD COLUMN product_line VARCHAR(255) DEFAULT ''", engine.dialect.name)
-        ensure_column(conn, 'export_products', 'sku', "ALTER TABLE export_products ADD COLUMN sku TEXT DEFAULT ''", "ALTER TABLE export_products ADD COLUMN sku VARCHAR(255) DEFAULT ''", engine.dialect.name)
-        ensure_column(conn, 'export_products', 'weight_label', "ALTER TABLE export_products ADD COLUMN weight_label TEXT DEFAULT ''", "ALTER TABLE export_products ADD COLUMN weight_label VARCHAR(255) DEFAULT ''", engine.dialect.name)
-        ensure_column(conn, 'export_products', 'pack_size', "ALTER TABLE export_products ADD COLUMN pack_size TEXT DEFAULT ''", "ALTER TABLE export_products ADD COLUMN pack_size VARCHAR(255) DEFAULT ''", engine.dialect.name)
-        ensure_column(conn, 'export_products', 'flavor', "ALTER TABLE export_products ADD COLUMN flavor TEXT DEFAULT ''", "ALTER TABLE export_products ADD COLUMN flavor VARCHAR(255) DEFAULT ''", engine.dialect.name)
-        ensure_column(conn, 'export_products', 'presentation', "ALTER TABLE export_products ADD COLUMN presentation TEXT DEFAULT ''", "ALTER TABLE export_products ADD COLUMN presentation VARCHAR(255) DEFAULT ''", engine.dialect.name)
-        ensure_column(conn, 'export_products', 'brochure_page', "ALTER TABLE export_products ADD COLUMN brochure_page INTEGER DEFAULT 0", "ALTER TABLE export_products ADD COLUMN brochure_page INT DEFAULT 0", engine.dialect.name)
         products_count = conn.execute(text('SELECT COUNT(*) FROM export_products')).scalar() or 0
         markets_count = conn.execute(text('SELECT COUNT(*) FROM export_markets')).scalar() or 0
         seed = load_export_catalog()
         now = time.time()
         if not products_count:
-            seed_export_products_from_catalog(conn)
+            for item in seed.get('products', []):
+                payload = dict(item)
+                payload.setdefault('created_at', now)
+                payload.setdefault('updated_at', now)
+                conn.execute(text("""
+                    INSERT INTO export_products
+                    (product_name, category, origin_country, packaging, price_band, target_markets, market_fit, notes, sort_order, created_at, updated_at)
+                    VALUES
+                    (:product_name, :category, :origin_country, :packaging, :price_band, :target_markets, :market_fit, :notes, :sort_order, :created_at, :updated_at)
+                """), payload)
         if not markets_count:
             for item in seed.get('markets', []):
                 payload = dict(item)
@@ -5046,23 +4719,13 @@ def export_home(request: Request):
 @app.get('/export/products', response_class=HTMLResponse)
 def export_products_page(request: Request):
     user = require_login(request)
-    q, category = catalog_filters_from_request(request)
-    where_sql, params = build_catalog_where(q, category)
     with engine.begin() as conn:
-        rows = conn.execute(text(f'SELECT * FROM export_products{where_sql} ORDER BY category ASC, sort_order ASC, id DESC'), params).fetchall()
-        categories = [r[0] for r in conn.execute(text("SELECT DISTINCT category FROM export_products WHERE COALESCE(category,'')!='' ORDER BY category ASC")).fetchall()]
-    grouped = {}
-    for row in rows:
-        grouped.setdefault(row.category or 'Uncategorized', []).append(row)
+        rows = conn.execute(text('SELECT * FROM export_products ORDER BY sort_order ASC, id DESC')).fetchall()
     return templates.TemplateResponse('export_products.html', {
         'request': request,
         'username': user.username,
         'user': user,
         'rows': rows,
-        'grouped': grouped,
-        'categories': categories,
-        'selected_category': category,
-        'q': q,
         'title': 'Export Products',
         'latest_notification_id': latest_notification_id_for_user(user.username),
     })
@@ -5077,60 +4740,20 @@ def export_products_add(request: Request,
                         price_band: str = Form(''),
                         target_markets: str = Form(''),
                         market_fit: str = Form(''),
-                        notes: str = Form(''),
-                        product_line: str = Form(''),
-                        sku: str = Form(''),
-                        weight_label: str = Form(''),
-                        pack_size: str = Form(''),
-                        flavor: str = Form(''),
-                        presentation: str = Form('')):
+                        notes: str = Form('')):
     user = require_editor(request)
     now = time.time()
     with engine.begin() as conn:
         conn.execute(text("""
             INSERT INTO export_products
-            (product_name, category, origin_country, packaging, price_band, target_markets, market_fit, notes, sort_order, created_at, updated_at, product_line, sku, weight_label, pack_size, flavor, presentation, brochure_page)
-            VALUES (:product_name, :category, :origin_country, :packaging, :price_band, :target_markets, :market_fit, :notes, 999, :t, :t, :product_line, :sku, :weight_label, :pack_size, :flavor, :presentation, 0)
+            (product_name, category, origin_country, packaging, price_band, target_markets, market_fit, notes, sort_order, created_at, updated_at)
+            VALUES (:product_name, :category, :origin_country, :packaging, :price_band, :target_markets, :market_fit, :notes, 999, :t, :t)
         """), {
             'product_name': product_name.strip(), 'category': category.strip(), 'origin_country': origin_country.strip(),
             'packaging': packaging.strip(), 'price_band': price_band.strip(), 'target_markets': target_markets.strip(),
             'market_fit': market_fit.strip(), 'notes': notes.strip(), 't': now,
-            'product_line': product_line.strip(), 'sku': sku.strip(), 'weight_label': weight_label.strip(),
-            'pack_size': pack_size.strip(), 'flavor': flavor.strip(), 'presentation': presentation.strip(),
         })
-    add_notification(f'{user.username} added export product {product_name.strip()}', kind='settings', target_username=user.username)
     return redirect('/export/products?success=created')
-
-
-@app.post('/export/products/seed-altahhan')
-def export_products_seed_altahhan(request: Request, reset_existing: str = Form('0')):
-    user = require_editor(request)
-    with engine.begin() as conn:
-        inserted = seed_export_products_from_catalog(conn, force_reset=(reset_existing == '1'))
-    add_notification(f'{user.username} synced Altahhan catalog products', kind='settings', target_username=user.username)
-    return redirect(f"/export/products?success=synced&inserted={inserted}")
-
-
-@app.get('/catalog', response_class=HTMLResponse)
-def export_catalog_browser(request: Request):
-    return export_products_page(request)
-
-
-@app.get('/export/products/suggest')
-def export_products_suggest(request: Request, q: str = ''):
-    require_login(request)
-    q = (q or '').strip().lower()
-    with engine.begin() as conn:
-        if q:
-            rows = conn.execute(text("""
-                SELECT id, product_name, category, COALESCE(weight_label,'') AS weight_label, COALESCE(packaging,'') AS packaging
-                FROM export_products
-                WHERE LOWER(product_name) LIKE :q OR LOWER(COALESCE(category,'')) LIKE :q OR LOWER(COALESCE(weight_label,'')) LIKE :q
-                ORDER BY sort_order ASC, id DESC LIMIT 20
-            """), {'q': f'%{q}%'}).mappings().all()
-        else:
-            rows = conn.execute(text("SELECT id, product_name, category, COALESCE(weight_label,'') AS weight_label, COALESCE(packaging,'') AS packaging FROM export_products ORDER BY sort_order ASC, id DESC LIMIT 20")).mappings().all()
-    return JSONResponse(rows)
 
 
 @app.get('/export/markets', response_class=HTMLResponse)
@@ -5292,9 +4915,7 @@ def ensure_shipment_deal_tables():
             CREATE TABLE IF NOT EXISTS shipment_deal_items (
                 id SERIAL PRIMARY KEY,
                 deal_id INTEGER NOT NULL,
-                product_id INTEGER DEFAULT 0,
                 product_name TEXT DEFAULT '',
-                product_line TEXT DEFAULT '',
                 weight_label TEXT DEFAULT '',
                 packaging TEXT DEFAULT '',
                 qty_ton DOUBLE PRECISION DEFAULT 0,
@@ -5314,7 +4935,6 @@ def ensure_shipment_deal_tables():
                 id SERIAL PRIMARY KEY,
                 client_id INTEGER DEFAULT 0,
                 client_name TEXT DEFAULT '',
-                product_id INTEGER DEFAULT 0,
                 product_name TEXT DEFAULT '',
                 weight_label TEXT DEFAULT '',
                 unit_price DOUBLE PRECISION DEFAULT 0,
@@ -5398,9 +5018,7 @@ def ensure_shipment_deal_tables():
             CREATE TABLE IF NOT EXISTS shipment_deal_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 deal_id INTEGER NOT NULL,
-                product_id INTEGER DEFAULT 0,
                 product_name TEXT DEFAULT '',
-                product_line TEXT DEFAULT '',
                 weight_label TEXT DEFAULT '',
                 packaging TEXT DEFAULT '',
                 qty_ton REAL DEFAULT 0,
@@ -5420,7 +5038,6 @@ def ensure_shipment_deal_tables():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 client_id INTEGER DEFAULT 0,
                 client_name TEXT DEFAULT '',
-                product_id INTEGER DEFAULT 0,
                 product_name TEXT DEFAULT '',
                 weight_label TEXT DEFAULT '',
                 unit_price REAL DEFAULT 0,
@@ -5433,6 +5050,49 @@ def ensure_shipment_deal_tables():
     with engine.begin() as conn:
         for stmt in ddl:
             conn.execute(text(stmt))
+
+        # Upgrade older SQLite/MySQL/Postgres databases in place. Earlier
+        # builds created shipment_deal_items and deal_client_prices with a
+        # smaller set of columns, which breaks newer itemized invoice logic on
+        # existing deployments. These lightweight migrations keep old Render
+        # databases usable without forcing the user to wipe data.
+        ensure_column(conn, 'shipment_deal_items', 'weight_label',
+                      "ALTER TABLE shipment_deal_items ADD COLUMN weight_label TEXT DEFAULT ''",
+                      "ALTER TABLE shipment_deal_items ADD COLUMN weight_label TEXT DEFAULT ''",
+                      dialect)
+        ensure_column(conn, 'shipment_deal_items', 'packaging',
+                      "ALTER TABLE shipment_deal_items ADD COLUMN packaging TEXT DEFAULT ''",
+                      "ALTER TABLE shipment_deal_items ADD COLUMN packaging TEXT DEFAULT ''",
+                      dialect)
+        ensure_column(conn, 'shipment_deal_items', 'sort_order',
+                      "ALTER TABLE shipment_deal_items ADD COLUMN sort_order INTEGER DEFAULT 0",
+                      "ALTER TABLE shipment_deal_items ADD COLUMN sort_order INTEGER DEFAULT 0",
+                      dialect)
+        ensure_column(conn, 'shipment_deal_items', 'notes',
+                      "ALTER TABLE shipment_deal_items ADD COLUMN notes TEXT DEFAULT ''",
+                      "ALTER TABLE shipment_deal_items ADD COLUMN notes TEXT DEFAULT ''",
+                      dialect)
+        ensure_column(conn, 'shipment_deal_items', 'created_at',
+                      "ALTER TABLE shipment_deal_items ADD COLUMN created_at REAL DEFAULT 0",
+                      "ALTER TABLE shipment_deal_items ADD COLUMN created_at DOUBLE PRECISION DEFAULT 0",
+                      dialect)
+        ensure_column(conn, 'shipment_deal_items', 'updated_at',
+                      "ALTER TABLE shipment_deal_items ADD COLUMN updated_at REAL DEFAULT 0",
+                      "ALTER TABLE shipment_deal_items ADD COLUMN updated_at DOUBLE PRECISION DEFAULT 0",
+                      dialect)
+
+        ensure_column(conn, 'deal_client_prices', 'currency',
+                      "ALTER TABLE deal_client_prices ADD COLUMN currency TEXT DEFAULT 'USD'",
+                      "ALTER TABLE deal_client_prices ADD COLUMN currency TEXT DEFAULT 'USD'",
+                      dialect)
+        ensure_column(conn, 'deal_client_prices', 'last_used_at',
+                      "ALTER TABLE deal_client_prices ADD COLUMN last_used_at REAL DEFAULT 0",
+                      "ALTER TABLE deal_client_prices ADD COLUMN last_used_at DOUBLE PRECISION DEFAULT 0",
+                      dialect)
+        ensure_column(conn, 'deal_client_prices', 'updated_by',
+                      "ALTER TABLE deal_client_prices ADD COLUMN updated_by TEXT DEFAULT ''",
+                      "ALTER TABLE deal_client_prices ADD COLUMN updated_by TEXT DEFAULT ''",
+                      dialect)
 
 
 def _float(v):
@@ -5512,30 +5172,16 @@ def format_docx_date(value: str) -> str:
     return value.upper()
 
 
-def parse_any_date_to_ts(value: str) -> float:
-    value = _text(value)
-    if not value:
-        return 0
-    for fmt in ('%d-%b-%Y', '%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y'):
-        try:
-            return datetime.strptime(value, fmt).timestamp()
-        except Exception:
-            pass
-    return 0
-
-
-
-def match_export_product(conn, raw_name: str):
-    raw = _text(raw_name)
-    if not raw:
+def maybe_convert_to_pdf(source_path: Path) -> Path | None:
+    try:
+        outdir = source_path.parent
+        subprocess.run([
+            'libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', str(outdir), str(source_path)
+        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        pdf_path = outdir / f"{source_path.stem}.pdf"
+        return pdf_path if pdf_path.exists() else None
+    except Exception:
         return None
-    base = raw.split(' - ')[0].strip().lower()
-    rows = conn.execute(text("SELECT * FROM export_products WHERE LOWER(product_name)=:base OR LOWER(product_name) LIKE :like ORDER BY CASE WHEN LOWER(product_name)=:base THEN 0 ELSE 1 END, sort_order ASC, id ASC LIMIT 20"), {'base': base, 'like': f"{base}%"}).fetchall()
-    for row in rows:
-        combined = (_text(getattr(row, 'product_name', '')) + (f" - {_text(getattr(row, 'weight_label', ''))}" if _text(getattr(row, 'weight_label', '')) else '')).lower()
-        if raw.lower() == combined or raw.lower() == _text(getattr(row, 'product_name', '')).lower():
-            return row
-    return rows[0] if rows else None
 
 
 def fetch_deal_items(conn, deal_id: int) -> list[dict]:
@@ -5544,12 +5190,6 @@ def fetch_deal_items(conn, deal_id: int) -> list[dict]:
     for r in rows:
         d = dict(r._mapping)
         d['display_name'] = _text(d.get('product_name')) + (f" · {_text(d.get('weight_label'))}" if _text(d.get('weight_label')) else '')
-        d['qty_ton'] = _float(d.get('qty_ton'))
-        d['net_weight_ton'] = _float(d.get('net_weight_ton'))
-        d['gross_weight_ton'] = _float(d.get('gross_weight_ton'))
-        d['unit_price'] = _float(d.get('unit_price'))
-        d['total_amount'] = _float(d.get('total_amount'))
-        d['cartons_count'] = _int(d.get('cartons_count'))
         items.append(d)
     return items
 
@@ -5588,28 +5228,11 @@ def recalc_deal_totals(conn, deal_id: int) -> dict:
         total_amount = round(items_total + freight, 2)
         conn.execute(text("""
             UPDATE shipment_deals
-            SET product_name=:product_name,
-                product_description=:product_description,
-                qty_ton=:qty_ton,
-                cartons_count=:cartons_count,
-                net_weight_ton=:net_weight_ton,
-                gross_weight_ton=:gross_weight_ton,
-                unit_price=:unit_price,
-                total_amount=:total_amount,
-                updated_at=:updated_at
+            SET product_name=:product_name, product_description=:product_description, qty_ton=:qty_ton, cartons_count=:cartons_count,
+                net_weight_ton=:net_weight_ton, gross_weight_ton=:gross_weight_ton, unit_price=:unit_price, total_amount=:total_amount, updated_at=:updated_at
             WHERE id=:id
-        """), {
-            'id': deal_id,
-            'product_name': product_name or _text(getattr(deal, 'product_name', '')),
-            'product_description': product_description or _text(getattr(deal, 'product_description', '')),
-            'qty_ton': qty_ton,
-            'cartons_count': cartons,
-            'net_weight_ton': net_ton,
-            'gross_weight_ton': gross_ton,
-            'unit_price': unit_price,
-            'total_amount': total_amount,
-            'updated_at': time.time(),
-        })
+        """), {'id': deal_id, 'product_name': product_name or _text(getattr(deal,'product_name','')), 'product_description': product_description or _text(getattr(deal,'product_description','')),
+                 'qty_ton': qty_ton, 'cartons_count': cartons, 'net_weight_ton': net_ton, 'gross_weight_ton': gross_ton, 'unit_price': unit_price, 'total_amount': total_amount, 'updated_at': time.time()})
         deal = conn.execute(text('SELECT * FROM shipment_deals WHERE id=:id'), {'id': deal_id}).fetchone()
     return {'items': items, 'deal': deal}
 
@@ -5619,24 +5242,22 @@ def build_deal_validation(conn, deal, shipment=None, items: list[dict] | None = 
     issues = []
     if not _text(getattr(deal, 'client_name', '')):
         issues.append('Client name is missing.')
+    if not _text(getattr(deal, 'client_address', '')):
+        issues.append('Client address is missing.')
     if not _text(getattr(deal, 'invoice_no', '')):
         issues.append('Invoice number is missing.')
-    if not items and not _text(getattr(deal, 'product_name', '')):
-        issues.append('Add at least one shipment item or define a product name.')
+    if not _text(getattr(deal, 'booking_no', '')):
+        issues.append('Booking number is missing.')
+    if not _text(getattr(deal, 'invoice_date', '')):
+        issues.append('Invoice date is missing.')
     if items:
-        invalid_rows = []
         for idx, item in enumerate(items, start=1):
-            row_issues = []
             if not _text(item.get('product_name')):
-                row_issues.append('product')
+                issues.append(f'Item {idx}: product name is missing.')
             if _float(item.get('qty_ton')) <= 0:
-                row_issues.append('qty')
+                issues.append(f'Item {idx}: quantity must be greater than zero.')
             if _float(item.get('unit_price')) <= 0:
-                row_issues.append('price')
-            if row_issues:
-                invalid_rows.append(f"item {idx}: {', '.join(row_issues)}")
-        if invalid_rows:
-            issues.append('Complete these item fields before generating docs: ' + '; '.join(invalid_rows))
+                issues.append(f'Item {idx}: unit price must be greater than zero.')
     else:
         if _float(getattr(deal, 'qty_ton', 0)) <= 0:
             issues.append('Quantity must be greater than zero.')
@@ -5653,6 +5274,16 @@ def build_deal_validation(conn, deal, shipment=None, items: list[dict] | None = 
             issues.append('Origin port is missing from shipment.')
         if not _text(getattr(shipment, 'destination_port', '')):
             issues.append('Destination port is missing from shipment.')
+    if (_text(getattr(deal, 'payment_method', 'CAD')).upper() == 'CAD'):
+        if not _text(getattr(deal, 'consignee_bank_name', '')):
+            issues.append('Consignee bank name is missing for CAD.')
+        if not _text(getattr(deal, 'consignee_bank_iban', '')) and not _text(getattr(deal, 'consignee_bank_account', '')):
+            issues.append('Consignee IBAN/account is missing for CAD.')
+        if not _text(getattr(deal, 'consignee_bank_swift', '')):
+            issues.append('Consignee SWIFT is missing for CAD.')
+    else:
+        if not _text(getattr(deal, 'maturity_date', '')):
+            issues.append('Maturity date is required for bill of exchange.')
     return issues
 
 
@@ -5672,143 +5303,26 @@ def build_deal_payment_snapshot(conn, deal) -> dict:
         payment_status = 'Overdue'
     else:
         payment_status = 'Unpaid'
-    last_payment_on = conn.execute(text('SELECT paid_on FROM deal_payments WHERE deal_id=:id ORDER BY id DESC LIMIT 1'), {'id': deal.id}).scalar() or ''
-    payments_count = int(conn.execute(text('SELECT COUNT(*) FROM deal_payments WHERE deal_id=:id'), {'id': deal.id}).scalar() or 0)
-    return {
-        'paid_amount': round(paid_amount, 2),
-        'remaining_amount': remaining_amount,
-        'payment_status': payment_status,
-        'payments_count': payments_count,
-        'last_payment_on': _text(last_payment_on),
-        'maturity_ts': maturity_ts,
-        'paid_pct': round((paid_amount / total_amount) * 100, 2) if total_amount else 0,
-    }
+    return {'paid_amount': round(paid_amount,2), 'remaining_amount': remaining_amount, 'payment_status': payment_status, 'paid_pct': round((paid_amount/total_amount)*100,2) if total_amount else 0}
 
 
 def build_shipment_finance_snapshot(conn, shipment_id: int) -> dict:
     total_amount = float(conn.execute(text('SELECT COALESCE(SUM(total_amount),0) FROM shipment_deals WHERE shipment_id=:id'), {'id': shipment_id}).scalar() or 0)
-    paid_amount = float(conn.execute(text("""
-        SELECT COALESCE(SUM(p.amount),0)
-        FROM deal_payments p
-        JOIN shipment_deals d ON d.id=p.deal_id
-        WHERE d.shipment_id=:id
-    """), {'id': shipment_id}).scalar() or 0)
+    paid_amount = float(conn.execute(text("SELECT COALESCE(SUM(p.amount),0) FROM deal_payments p JOIN shipment_deals d ON d.id=p.deal_id WHERE d.shipment_id=:id"), {'id': shipment_id}).scalar() or 0)
     remaining_amount = round(max(total_amount - paid_amount, 0), 2)
-    return {
-        'total_amount': round(total_amount, 2),
-        'paid_amount': round(paid_amount, 2),
-        'remaining_amount': remaining_amount,
-        'paid_pct': round((paid_amount / total_amount) * 100, 2) if total_amount else 0,
-    }
+    return {'total_amount': round(total_amount,2), 'paid_amount': round(paid_amount,2), 'remaining_amount': remaining_amount, 'paid_pct': round((paid_amount/total_amount)*100,2) if total_amount else 0}
 
 
-def lookup_client_product_price(conn, deal, matched_product=None, fallback_product_name: str = '') -> float:
-    client_id = _int(getattr(deal, 'client_id', 0))
-    client_name = _text(getattr(deal, 'client_name', ''))
-    product_id = _int(getattr(matched_product, 'id', 0)) if matched_product is not None else 0
-    product_name = _text(getattr(matched_product, 'product_name', '')) or _text(fallback_product_name)
-    weight_label = _text(getattr(matched_product, 'weight_label', ''))
-    params = {
-        'client_id': client_id,
-        'client_name': client_name.lower(),
-        'product_id': product_id,
-        'product_name': product_name.lower(),
-        'weight_label': weight_label.lower(),
-    }
-    if product_id:
-        row = conn.execute(text("""
-            SELECT unit_price FROM deal_client_prices
-            WHERE ((:client_id > 0 AND client_id=:client_id) OR (LOWER(client_name)=:client_name AND :client_name<>''))
-              AND product_id=:product_id
-            ORDER BY last_used_at DESC, id DESC
-            LIMIT 1
-        """), params).fetchone()
-        if row:
-            return _float(getattr(row, 'unit_price', 0))
-    row = conn.execute(text("""
-        SELECT unit_price FROM deal_client_prices
-        WHERE ((:client_id > 0 AND client_id=:client_id) OR (LOWER(client_name)=:client_name AND :client_name<>''))
-          AND LOWER(product_name)=:product_name
-          AND (LOWER(COALESCE(weight_label,''))=:weight_label OR :weight_label='')
-        ORDER BY CASE WHEN LOWER(COALESCE(weight_label,''))=:weight_label THEN 0 ELSE 1 END,
-                 last_used_at DESC, id DESC
-        LIMIT 1
-    """), params).fetchone()
-    return _float(getattr(row, 'unit_price', 0)) if row else 0.0
-
-
-def remember_client_product_price(conn, deal, product_id: int, product_name: str, weight_label: str, unit_price: float, updated_by: str, currency: str = 'USD'):
-    price = _float(unit_price)
-    if price <= 0:
-        return
-    client_id = _int(getattr(deal, 'client_id', 0))
-    client_name = _text(getattr(deal, 'client_name', ''))
-    if not client_id and not client_name:
-        return
-    params = {
-        'client_id': client_id,
-        'client_name': client_name,
-        'product_id': _int(product_id),
-        'product_name': _text(product_name),
-        'weight_label': _text(weight_label),
-        'unit_price': price,
-        'currency': _text(currency) or 'USD',
-        'last_used_at': time.time(),
-        'updated_by': _text(updated_by),
-    }
-    existing = conn.execute(text("""
-        SELECT id FROM deal_client_prices
-        WHERE ((:client_id > 0 AND client_id=:client_id) OR (LOWER(client_name)=LOWER(:client_name) AND :client_name<>''))
-          AND ((:product_id > 0 AND product_id=:product_id) OR (LOWER(product_name)=LOWER(:product_name) AND LOWER(COALESCE(weight_label,''))=LOWER(:weight_label)))
-        ORDER BY id DESC
-        LIMIT 1
-    """), params).fetchone()
-    if existing:
-        conn.execute(text("""
-            UPDATE deal_client_prices
-            SET product_id=:product_id,
-                product_name=:product_name,
-                weight_label=:weight_label,
-                unit_price=:unit_price,
-                currency=:currency,
-                last_used_at=:last_used_at,
-                updated_by=:updated_by
-            WHERE id=:id
-        """), {**params, 'id': int(getattr(existing, 'id'))})
-    else:
-        conn.execute(text("""
-            INSERT INTO deal_client_prices (
-                client_id, client_name, product_id, product_name, weight_label,
-                unit_price, currency, last_used_at, updated_by
-            ) VALUES (
-                :client_id, :client_name, :product_id, :product_name, :weight_label,
-                :unit_price, :currency, :last_used_at, :updated_by
-            )
-        """), params)
-
-
-def fetch_client_pricebook(conn, deal_id: int) -> list[dict]:
-    deal = conn.execute(text('SELECT * FROM shipment_deals WHERE id=:id'), {'id': deal_id}).fetchone()
-    if not deal:
-        return []
-    rows = conn.execute(text("""
-        SELECT * FROM deal_client_prices
-        WHERE ((:client_id > 0 AND client_id=:client_id) OR (LOWER(client_name)=LOWER(:client_name) AND :client_name<>''))
-        ORDER BY last_used_at DESC, product_name ASC
-        LIMIT 60
-    """), {'client_id': _int(getattr(deal, 'client_id', 0)), 'client_name': _text(getattr(deal, 'client_name', ''))}).fetchall()
-    return [dict(r._mapping) for r in rows]
-
-def maybe_convert_to_pdf(source_path: Path) -> Path | None:
-    try:
-        outdir = source_path.parent
-        subprocess.run([
-            'libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', str(outdir), str(source_path)
-        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        pdf_path = outdir / f"{source_path.stem}.pdf"
-        return pdf_path if pdf_path.exists() else None
-    except Exception:
-        return None
+def parse_any_date_to_ts(value: str) -> float:
+    value = _text(value)
+    if not value:
+        return 0
+    for fmt in ('%d-%b-%Y', '%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%d %B %Y'):
+        try:
+            return datetime.strptime(value, fmt).timestamp()
+        except Exception:
+            pass
+    return 0
 
 
 def build_deal_payload(deal, shipment, items: list[dict] | None = None) -> dict:
@@ -5818,10 +5332,9 @@ def build_deal_payload(deal, shipment, items: list[dict] | None = None) -> dict:
     freight = _float(getattr(deal, 'freight_amount', 0))
     fob = round(qty_ton * unit_price, 2)
     total = round(fob + freight, 2)
-    invoice_date = _text(getattr(deal, 'invoice_date', ''))
-    if not invoice_date:
-        invoice_date = datetime.now().strftime('%d-%b-%Y')
+    invoice_date = _text(getattr(deal, 'invoice_date', '')) or datetime.now().strftime('%d-%b-%Y')
     item_breakdown = build_deal_items_summary(items)
+    docs_qty_total = 13
     return {
         'shipment_no': _text(getattr(shipment, 'shipment_no', '')),
         'booking_no': _text(getattr(deal, 'booking_no', '')) or _text(getattr(shipment, 'shipment_no', '')),
@@ -5866,6 +5379,7 @@ def build_deal_payload(deal, shipment, items: list[dict] | None = None) -> dict:
         'shipper_iban': 'EG090027002001140724710010201',
         'shipper_swift': 'ADCBEGCXXXX',
         'shipper_bank_address': 'Tanta Branch',
+        'docs_qty_total': docs_qty_total,
     }
 
 
@@ -5876,6 +5390,11 @@ def generate_invoice_packing_workbook(payload: dict, target_path: Path) -> list[
     wb = openpyxl.load_workbook(template_path, keep_vba=True)
     invoice = wb['Invoice']
     packing = wb['Packing List']
+    items = payload.get('items') or [{
+        'product_name': payload['product_name'], 'display_name': payload.get('item_breakdown') or payload['product_description'],
+        'qty_ton': payload['qty_ton'], 'cartons_count': payload['cartons_count'], 'gross_weight_ton': payload['gross_weight_ton'],
+        'net_weight_ton': payload['net_weight_ton'], 'unit_price': payload['unit_price'], 'total_amount': payload['fob_amount']
+    }]
 
     invoice['C11'] = payload['client_name']
     invoice['G11'] = payload['invoice_date']
@@ -5885,21 +5404,43 @@ def generate_invoice_packing_workbook(payload: dict, target_path: Path) -> list[
     invoice['C14'] = payload['phone']
     invoice['C15'] = payload['email']
     invoice['D20'] = round(payload['unit_price'] + (payload['freight_amount'] / payload['qty_ton'] if payload['qty_ton'] else 0), 2)
-    invoice['B22'] = payload['item_breakdown'] or payload['product_description']
-    invoice['D22'] = 'TON'
-    invoice['E22'] = payload['qty_ton']
-    invoice['F22'] = payload['unit_price']
-    invoice['G22'] = payload['fob_amount']
-    invoice['G23'] = payload['fob_amount']
-    invoice['G24'] = payload['freight_amount']
-    invoice['G25'] = payload['total_amount']
-    invoice['A26'] = f'SAY : {payload["total_amount_words"]}'
-    invoice['A28'] = f'GROSS WEIGHT : {payload["gross_weight_ton"]:,.3f} TON'
-    invoice['A29'] = f'NET WEIGHT : {payload["net_weight_ton"]:,.3f} TON'
-    invoice['A30'] = f'CARTON : {payload["cartons_count"]}'
-    invoice['A33'] = f'PORT OF LOADING :{payload["origin_port"] or "-"}'
-    invoice['A34'] = f'PORT OF DISCHARGE :{payload["destination_port"] or "-"}'
-    invoice['A35'] = f'SHIPPING METHOD : {payload["payment_method"] if payload["payment_method"] in {"FOB","CFR","CIF"} else "CFR"}'
+    start_row = 22
+    if len(items) > 1:
+        invoice.insert_rows(start_row + 1, len(items) - 1)
+        packing.insert_rows(17, len(items) - 1)
+    for idx, item in enumerate(items, start=0):
+        r = start_row + idx
+        pr = 16 + idx
+        invoice[f'A{r}'] = idx + 1
+        invoice[f'B{r}'] = item.get('display_name') or item.get('product_name') or payload['product_description']
+        invoice[f'D{r}'] = 'TON'
+        invoice[f'E{r}'] = _float(item.get('qty_ton'))
+        invoice[f'F{r}'] = _float(item.get('unit_price'))
+        invoice[f'G{r}'] = _float(item.get('total_amount'))
+        packing[f'A{pr}'] = idx + 1
+        packing[f'C{pr}'] = item.get('display_name') or item.get('product_name') or payload['product_description']
+        packing[f'D{pr}'] = _int(item.get('cartons_count'))
+        packing[f'E{pr}'] = _float(item.get('gross_weight_ton'))
+        packing[f'F{pr}'] = _float(item.get('net_weight_ton'))
+    total_row = start_row + len(items)
+    invoice[f'A{total_row}'] = 'TOTALAmount  FOB'
+    invoice[f'G{total_row}'] = round(sum(_float(i.get('total_amount')) for i in items), 2)
+    invoice[f'A{total_row+1}'] = 'SEA FREIGHT'
+    invoice[f'G{total_row+1}'] = payload['freight_amount']
+    invoice[f'A{total_row+2}'] = 'TOTALAmount CFR'
+    invoice[f'G{total_row+2}'] = payload['total_amount']
+    invoice[f'A{total_row+3}'] = f'SAY : {payload["total_amount_words"]}'
+    invoice[f'A{total_row+5}'] = f'GROSS WEIGHT : {payload["gross_weight_ton"]:,.3f} TON'
+    invoice[f'A{total_row+6}'] = f'NET WEIGHT : {payload["net_weight_ton"]:,.3f} TON'
+    invoice[f'A{total_row+7}'] = f'CARTON : {payload["cartons_count"]}'
+    invoice[f'A{total_row+10}'] = f'PORT OF LOADING :{payload["origin_port"] or "-"}'
+    invoice[f'A{total_row+11}'] = f'PORT OF DISCHARGE :{payload["destination_port"] or "-"}'
+    invoice[f'A{total_row+12}'] = f'SHIPPING METHOD : {payload["payment_method"] if payload["payment_method"] in {"FOB","CFR","CIF"} else "CFR"}'
+    invoice['A40'] = f'ACCOUNT NAME : {payload["company_name"]}'
+    invoice['A41'] = f'BANK NAME : {payload["shipper_bank_name"]}'
+    invoice['A42'] = f'ACCOUNT NUMBER:{payload["shipper_account_no"]}'
+    invoice['A43'] = f'IBAN ID : {payload["shipper_iban"]}'
+    invoice['A44'] = f'SWIFT CODE : {payload["shipper_swift"]}'
 
     packing['C9'] = payload['client_name']
     packing['F9'] = payload['invoice_date']
@@ -5908,15 +5449,13 @@ def generate_invoice_packing_workbook(payload: dict, target_path: Path) -> list[
     packing['C11'] = payload['ice_no']
     packing['C12'] = payload['phone']
     packing['C13'] = payload['email']
-    packing['C16'] = payload['item_breakdown'] or payload['product_description']
-    packing['D16'] = payload['cartons_count']
-    packing['E16'] = payload['gross_weight_ton']
-    packing['F16'] = payload['net_weight_ton']
-    packing['D17'] = payload['cartons_count']
-    packing['E17'] = payload['gross_weight_ton']
-    packing['F17'] = payload['net_weight_ton']
-    packing['A18'] = f"Total Carton :{payload['cartons_count']} Carton - Net Weight {int(round(payload['net_weight_ton']*1000))} Kg - Gross Weight {int(round(payload['gross_weight_ton']*1000))} Kg"
-    packing['A21'] = f"Booking No : {payload['booking_no']}"
+    total_pack_row = 16 + len(items)
+    packing[f'C{total_pack_row}'] = 'TOTAL'
+    packing[f'D{total_pack_row}'] = payload['cartons_count']
+    packing[f'E{total_pack_row}'] = payload['gross_weight_ton']
+    packing[f'F{total_pack_row}'] = payload['net_weight_ton']
+    packing[f'A{total_pack_row+1}'] = f"Total Carton :{payload['cartons_count']} Carton - Net Weight {int(round(payload['net_weight_ton']*1000))} Kg - Gross Weight {int(round(payload['gross_weight_ton']*1000))} Kg"
+    packing[f'A{total_pack_row+4}'] = f"Booking No : {payload['booking_no']}"
 
     wb.save(target_path)
     created = [target_path]
@@ -5944,25 +5483,71 @@ def replace_docx_text(document: Document, replacements: dict[str, str]):
                     replace_in_para(para)
 
 
+def set_docx_paragraph(paragraph, text: str):
+    paragraph.text = text
+
+
 def generate_cad_docx(payload: dict, target_path: Path) -> list[Path]:
     template_path = DOCUMENT_TEMPLATE_DIR / 'cad_template.docx'
     doc = Document(template_path)
     replacements = {
-        'Mille FOOD': payload['client_name'],
-        'MILLE FOOD': payload['client_name'].upper(),
-        '71 ANGEL HAY FARAH&BD GRANDE CEINTURE Rue 30 ETAGE 2- Morocco': payload['client_address'],
-        '+212 -698049626 / 212-661438088': payload['phone'],
-        '256500 USD': f"{int(round(payload['total_amount']))} {payload['currency']}",
-        'TWO HUNDRED FIFTY SIX THOUSAND FIVE HUNDRED  USD ONLY': payload['total_amount_words'],
-        '1432': payload['invoice_no'],
-        'ATTIJARI WAFA BANK – AWB': payload['consignee_bank_name'] or 'ATTIJARI WAFA BANK – AWB',
-        '0009335000000706': payload['consignee_bank_account'] or '',
-        '007 815 00 0933 5 000000706 50': payload['consignee_bank_iban'] or '',
-        'BCMAMAMC': payload['consignee_bank_swift'] or '',
-        '11000': payload['consignee_bank_postal_code'] or '',
-        'AVENUE ABDELKRIM KHATTABI , HAY SALAM CP 11000 , Sale Morocco': payload['consignee_bank_address'] or '',
+        'JANAT AL NAKHIL DATTES SARL': payload['client_name'],
+        'DERB MILAN BD LA GRANDE CEINTURE N°187 HAY EL FARAH. CASABLANCA , MAROCCO': payload['client_address'],
+        '+212 -698049626 / 212-661438088': payload['phone'] or '-',
+        '74250 USD': f"{int(round(payload['total_amount']))} {payload['currency']}",
+        'SEVENTY FOUR THOUSAND TWO HUNDRED FIFTY USD ONLY': payload['total_amount_words'],
+        '1431': payload['invoice_no'],
+        'AttijariWafa bank': payload['consignee_bank_name'] or '-',
+        '007 815 0009332000000595 10': payload['consignee_bank_account'] or payload['consignee_bank_iban'] or '-',
+        'MA64 007 815 0009332000000595 10': payload['consignee_bank_iban'] or '-',
+        'BCMAMAMC': payload['consignee_bank_swift'] or '-',
+        '26100': payload['consignee_bank_postal_code'] or '-',
+        "CENTRE D'AFFAIRES SALE AVENUE ABDELKRIM KHATTABI - HAY ESSALAM": payload['consignee_bank_address'] or '-',
     }
     replace_docx_text(doc, replacements)
+    for para in doc.paragraphs:
+        t = para.text.strip()
+        if t.startswith('Consignee:'):
+            set_docx_paragraph(para, f"Consignee: {payload['client_name']}")
+        elif t.startswith('Address:') and 'TANTA' not in t.upper():
+            set_docx_paragraph(para, f"Address: {payload['client_address']}")
+        elif t.startswith('Email:'):
+            set_docx_paragraph(para, f"Email: {payload['email'] or '-'}")
+        elif t.startswith('Acc Name:'):
+            set_docx_paragraph(para, f"Acc Name: {payload['client_name']}")
+        elif t.startswith('BANK NAME:') and 'Abu Dhabi' not in t:
+            set_docx_paragraph(para, f"BANK NAME: {payload['consignee_bank_name'] or '-'}")
+        elif t.startswith('ACC NO:') and '114072' not in t:
+            set_docx_paragraph(para, f"ACC NO: {payload['consignee_bank_account'] or payload['consignee_bank_iban'] or '-'}")
+        elif t.startswith('IBAN') and 'EG0900' not in t:
+            set_docx_paragraph(para, f"IBAN: {payload['consignee_bank_iban'] or '-'}")
+        elif t.startswith('SWIFT CODE:') and 'ADCBEG' not in t:
+            set_docx_paragraph(para, f"SWIFT CODE: {payload['consignee_bank_swift'] or '-'}")
+        elif 'Agency Name' in t or 'Postal Code' in t:
+            set_docx_paragraph(para, f"Agency Name : {payload['consignee_bank_name'] or '-'}   Postal Code : {payload['consignee_bank_postal_code'] or '-'}")
+        elif t.startswith('ADRESS:') and 'Tanta Branch' not in t:
+            set_docx_paragraph(para, f"ADRESS: {payload['consignee_bank_address'] or '-'}")
+        elif 'That Cover is Cash against Documents With amount' in t:
+            set_docx_paragraph(para, f"That Cover is Cash against Documents With amount {int(round(payload['total_amount']))} {payload['currency']} ({payload['total_amount_words']})")
+        elif t.startswith('Inv number'):
+            set_docx_paragraph(para, f"Inv number {payload['invoice_no']} .")
+    if doc.tables:
+        quantities = {
+            'BL Original': '3', 'Invoice ': '3', 'Packing list ': '3', 'Origin certificate': '1',
+            'HEALTH certificate': '1', 'Phytosanitary certificate': '1', 'Export Cr SAD ': '1', 'Export Cr (SAD ) ': '1',
+        }
+        total_docs = 0
+        for row in doc.tables[0].rows:
+            key = row.cells[0].text
+            if key in quantities:
+                row.cells[1].text = quantities[key]
+                try:
+                    total_docs += int(''.join(ch for ch in quantities[key] if ch.isdigit()) or '0')
+                except Exception:
+                    pass
+            elif key.strip().startswith('Total of Documents'):
+                total_docs = total_docs or 13
+                row.cells[1].text = f"{total_docs} Document "
     doc.save(target_path)
     created = [target_path]
     pdf = maybe_convert_to_pdf(target_path)
@@ -5974,22 +5559,54 @@ def generate_cad_docx(payload: dict, target_path: Path) -> list[Path]:
 def generate_bill_docx(payload: dict, target_path: Path) -> list[Path]:
     template_path = DOCUMENT_TEMPLATE_DIR / 'bill_template.docx'
     doc = Document(template_path)
-    replacements = {
-        '20 DECEMBER 2025                     Inv 1429': f"{payload['invoice_date_docx']}                     Inv {payload['invoice_no']}",
-        'NAKHIL EL OUADI ELMAHABA AGHABI': payload['client_name'],
-        'au276, BD IBN TACHEFINE ETG3.3 CASABLANCA, MOROCCO': payload['client_address'],
-        '003557512000068': payload['ice_no'] or '',
-        '+2120771181590': payload['phone'] or '',
-        '106000 USD  ) ONE HUNDRED SIX THOUSAND USD ONLY)': f"{int(round(payload['total_amount']))} {payload['currency']} ) {payload['total_amount_words']})",
-        '31 March 2026': payload['maturity_date_docx'] or payload['invoice_date_docx'],
-        'Attijariwafa bank': payload['consignee_bank_name'] or 'Attijariwafa bank',
-        '0000 105000005105': payload['consignee_bank_account'] or '',
-        'MA64 007 780 0000105000005105 34': payload['consignee_bank_iban'] or '',
-        'BCMAMAMC': payload['consignee_bank_swift'] or '',
-        '20300': payload['consignee_bank_postal_code'] or '',
-        'C.A Dakar SA Dakar - CASABLANCA. MOROCCO': payload['consignee_bank_address'] or '',
-    }
-    replace_docx_text(doc, replacements)
+    if doc.tables:
+        table = doc.tables[0]
+        for row in table.rows:
+            label = row.cells[0].text.replace("\n", ' ').strip()
+            if 'Date Of Issue' in label:
+                row.cells[1].text = f"{payload['invoice_date_docx']}                     Inv {payload['invoice_no']}"
+            elif 'Drawer' in label:
+                row.cells[1].text = (
+                    f"{payload['company_name']}\n"
+                    f"New Valley Egypt.  Office 417 Harram st , Giza .   Phone: 00201068829161\n"
+                    f"BANK NAME: {payload['shipper_bank_name']}\n"
+                    f"ACC NO: {payload['shipper_account_no']}\n"
+                    f"IBAN ID: {payload['shipper_iban']}\n"
+                    f"SWIFT CODE: {payload['shipper_swift']}\n"
+                    f"ADRESS: {payload['shipper_bank_address']}"
+                )
+            elif 'Drawee' in label:
+                row.cells[1].text = (
+                    f"{payload['client_name']}\n"
+                    f"Address : {payload['client_address']}\n"
+                    f"ICE NUMBER: {payload['ice_no']}\n"
+                    f"Phone : {payload['phone'] or '-'}\n"
+                    f"Bank Details consignee\n"
+                    f"Acc Name: {payload['client_name']}\n"
+                    f"BANK NAME: {payload['consignee_bank_name'] or '-'}\n"
+                    f"ACC NO: {payload['consignee_bank_account'] or payload['consignee_bank_iban'] or '-'}\n"
+                    f"CODE IBAN: {payload['consignee_bank_iban'] or '-'}\n"
+                    f"SWIFT CODE: {payload['consignee_bank_swift'] or '-'}\n"
+                    f"Postal code : {payload['consignee_bank_postal_code'] or '-'}\n"
+                    f"Agency Name {payload['consignee_bank_name'] or '-'}\n"
+                    f"ADRESS: {payload['consignee_bank_address'] or '-'}"
+                )
+            elif 'Sum Of' in label:
+                row.cells[1].text = f"{int(round(payload['total_amount']))} {payload['currency']}  ) {payload['total_amount_words']})"
+            elif 'Date of Maturity' in label:
+                row.cells[1].text = payload['maturity_date_docx'] or payload['invoice_date_docx']
+            elif 'Payable With' in label:
+                row.cells[1].text = (
+                    f"{payload['client_name']}\n"
+                    f"Bank Details consignee\n"
+                    f"Acc Name: {payload['client_name']}\n"
+                    f"BANK NAME: {payload['consignee_bank_name'] or '-'}\n"
+                    f"ACC NO: {payload['consignee_bank_account'] or payload['consignee_bank_iban'] or '-'}\n"
+                    f"CODE IBAN: {payload['consignee_bank_iban'] or '-'}\n"
+                    f"SWIFT CODE: {payload['consignee_bank_swift'] or '-'}\n"
+                    f"Agency Name {payload['consignee_bank_name'] or '-'}\n"
+                    f"ADRESS: {payload['consignee_bank_address'] or '-'}"
+                )
     doc.save(target_path)
     created = [target_path]
     pdf = maybe_convert_to_pdf(target_path)
@@ -6175,39 +5792,10 @@ def add_customer_deal(request: Request,
             'updated_at': now,
         })
         if _text(product_name) or _float(qty_ton) > 0 or _int(cartons_count) > 0:
-            matched_product = match_export_product(conn, _text(product_name) or _text(getattr(shipment, 'product_name', '')))
-            resolved_price = _float(unit_price)
-            if resolved_price <= 0:
-                resolved_price = lookup_client_product_price(conn, SimpleNamespace(client_id=_int(client_id), client_name=payload['client_name']), matched_product, _text(product_name) or _text(getattr(shipment, 'product_name', '')))
-            inserted_product_name = _text(product_name) or _text(getattr(shipment, 'product_name', ''))
             conn.execute(text("""
-                INSERT INTO shipment_deal_items (
-                    deal_id, product_id, product_name, product_line, weight_label, packaging,
-                    qty_ton, cartons_count, net_weight_ton, gross_weight_ton, unit_price, total_amount,
-                    sort_order, notes, created_at, updated_at
-                ) VALUES (
-                    :deal_id, :product_id, :product_name, :product_line, :weight_label, :packaging,
-                    :qty_ton, :cartons_count, :net_weight_ton, :gross_weight_ton, :unit_price, :total_amount,
-                    1, :notes, :created_at, :updated_at
-                )
-            """), {
-                'deal_id': deal_id,
-                'product_id': int(getattr(matched_product, 'id', 0) or 0),
-                'product_name': inserted_product_name,
-                'product_line': _text(getattr(matched_product, 'product_line', '')),
-                'weight_label': _text(getattr(matched_product, 'weight_label', '')),
-                'packaging': _text(getattr(matched_product, 'packaging', '')),
-                'qty_ton': _float(qty_ton),
-                'cartons_count': _int(cartons_count),
-                'net_weight_ton': _float(net_weight_ton),
-                'gross_weight_ton': _float(gross_weight_ton),
-                'unit_price': resolved_price,
-                'total_amount': round(_float(qty_ton) * resolved_price, 2),
-                'notes': _text(notes),
-                'created_at': now,
-                'updated_at': now,
-            })
-            remember_client_product_price(conn, SimpleNamespace(client_id=_int(client_id), client_name=payload['client_name']), int(getattr(matched_product, 'id', 0) or 0), inserted_product_name, _text(getattr(matched_product, 'weight_label', '')), resolved_price, user.username, _text(currency) or 'USD')
+                INSERT INTO shipment_deal_items (deal_id, product_name, weight_label, packaging, qty_ton, cartons_count, net_weight_ton, gross_weight_ton, unit_price, total_amount, sort_order, notes, created_at, updated_at)
+                VALUES (:deal_id, :product_name, '', '', :qty_ton, :cartons_count, :net_weight_ton, :gross_weight_ton, :unit_price, :total_amount, 1, :notes, :created_at, :updated_at)
+            """), {'deal_id': deal_id, 'product_name': _text(product_name) or _text(getattr(shipment, 'product_name', '')), 'qty_ton': _float(qty_ton), 'cartons_count': _int(cartons_count), 'net_weight_ton': _float(net_weight_ton), 'gross_weight_ton': _float(gross_weight_ton), 'unit_price': _float(unit_price), 'total_amount': round(_float(qty_ton) * _float(unit_price), 2), 'notes': _text(notes), 'created_at': now, 'updated_at': now})
         recalc_deal_totals(conn, deal_id)
         deal_now = conn.execute(text('SELECT * FROM shipment_deals WHERE id=:id'), {'id': deal_id}).fetchone()
         issues = build_deal_validation(conn, deal_now, shipment, fetch_deal_items(conn, deal_id))
@@ -6225,18 +5813,10 @@ def deal_detail(request: Request, deal_id: int):
             return redirect('/shipments?error=deal_not_found')
         shipment = conn.execute(text('SELECT * FROM shipments WHERE id=:id'), {'id': deal.shipment_id}).fetchone()
         docs = conn.execute(text('SELECT * FROM deal_documents WHERE deal_id=:id ORDER BY id DESC'), {'id': deal_id}).fetchall()
-        payments = conn.execute(text('SELECT * FROM deal_payments WHERE deal_id=:id ORDER BY id DESC'), {'id': deal_id}).fetchall()
-        items = fetch_deal_items(conn, deal_id)
-        payment = build_deal_payment_snapshot(conn, deal)
-        validation_issues = build_deal_validation(conn, deal, shipment, items)
-        catalog_products = conn.execute(text("SELECT id, product_name, category, product_line, weight_label, packaging FROM export_products ORDER BY category ASC, sort_order ASC, product_name ASC LIMIT 300")).fetchall()
-        pricebook_rows = fetch_client_pricebook(conn, deal_id)
-    payload = build_deal_payload(deal, shipment, items)
+    payload = build_deal_payload(deal, shipment)
     return templates.TemplateResponse('deal_detail.html', {
         'request': request, 'username': user.username, 'user': user,
         'deal': deal, 'shipment': shipment, 'docs': docs, 'payload': payload,
-        'payments': payments, 'payment': payment, 'items': items, 'validation_issues': validation_issues,
-        'catalog_products': catalog_products, 'pricebook_rows': pricebook_rows,
         'title': 'Customer Deal', 'latest_notification_id': latest_notification_id_for_user(user.username)
     })
 
@@ -6244,255 +5824,41 @@ def deal_detail(request: Request, deal_id: int):
 @app.post('/deal/{deal_id}/generate')
 def generate_deal_documents(request: Request, deal_id: int):
     user = require_editor(request)
-    try:
-        with engine.begin() as conn:
-            generate_deal_document_pack(conn, deal_id, user.username)
-        return redirect(f'/deal/{deal_id}?success=documents_generated')
-    except Exception as exc:
-        return redirect(f'/deal/{deal_id}?error=' + urllib.parse.quote(str(exc)[:240]))
+    with engine.begin() as conn:
+        generate_deal_document_pack(conn, deal_id, user.username)
+    return redirect(f'/deal/{deal_id}?success=documents_generated')
 
 
 @app.post('/deal/{deal_id}/item/add')
-def add_deal_item(request: Request,
-                  deal_id: int,
-                  product_ref: str = Form(''),
-                  qty_ton: float = Form(0),
-                  cartons_count: int = Form(0),
-                  net_weight_ton: float = Form(0),
-                  gross_weight_ton: float = Form(0),
-                  unit_price: str = Form(''),
-                  notes: str = Form('')):
+def add_deal_item(request: Request, deal_id: int, product_ref: str = Form(''), qty_ton: float = Form(0), cartons_count: int = Form(0), net_weight_ton: float = Form(0), gross_weight_ton: float = Form(0), unit_price: float = Form(0), notes: str = Form('')):
     user = require_editor(request)
     now = time.time()
     with engine.begin() as conn:
         deal = conn.execute(text('SELECT * FROM shipment_deals WHERE id=:id'), {'id': deal_id}).fetchone()
         if not deal:
             return redirect('/shipments?error=deal_not_found')
-        matched = match_export_product(conn, product_ref)
         row_count = conn.execute(text('SELECT COUNT(*) FROM shipment_deal_items WHERE deal_id=:id'), {'id': deal_id}).scalar() or 0
-        product_name = _text(product_ref)
-        if matched:
-            product_name = _text(getattr(matched, 'product_name', ''))
-        resolved_price = _float(unit_price)
-        if resolved_price <= 0:
-            resolved_price = lookup_client_product_price(conn, deal, matched, product_name)
         conn.execute(text("""
-            INSERT INTO shipment_deal_items (
-                deal_id, product_id, product_name, product_line, weight_label, packaging,
-                qty_ton, cartons_count, net_weight_ton, gross_weight_ton, unit_price, total_amount,
-                sort_order, notes, created_at, updated_at
-            ) VALUES (
-                :deal_id, :product_id, :product_name, :product_line, :weight_label, :packaging,
-                :qty_ton, :cartons_count, :net_weight_ton, :gross_weight_ton, :unit_price, :total_amount,
-                :sort_order, :notes, :created_at, :updated_at
-            )
-        """), {
-            'deal_id': deal_id,
-            'product_id': int(getattr(matched, 'id', 0) or 0),
-            'product_name': product_name,
-            'product_line': _text(getattr(matched, 'product_line', '')),
-            'weight_label': _text(getattr(matched, 'weight_label', '')),
-            'packaging': _text(getattr(matched, 'packaging', '')),
-            'qty_ton': _float(qty_ton),
-            'cartons_count': _int(cartons_count),
-            'net_weight_ton': _float(net_weight_ton),
-            'gross_weight_ton': _float(gross_weight_ton),
-            'unit_price': resolved_price,
-            'total_amount': round(_float(qty_ton) * resolved_price, 2),
-            'sort_order': int(row_count) + 1,
-            'notes': _text(notes),
-            'created_at': now,
-            'updated_at': now,
-        })
-        remember_client_product_price(conn, deal, int(getattr(matched, 'id', 0) or 0), product_name, _text(getattr(matched, 'weight_label', '')), resolved_price, user.username, getattr(deal, 'currency', 'USD'))
+            INSERT INTO shipment_deal_items (deal_id, product_name, weight_label, packaging, qty_ton, cartons_count, net_weight_ton, gross_weight_ton, unit_price, total_amount, sort_order, notes, created_at, updated_at)
+            VALUES (:deal_id, :product_name, '', '', :qty_ton, :cartons_count, :net_weight_ton, :gross_weight_ton, :unit_price, :total_amount, :sort_order, :notes, :created_at, :updated_at)
+        """), {'deal_id': deal_id, 'product_name': _text(product_ref), 'qty_ton': _float(qty_ton), 'cartons_count': _int(cartons_count), 'net_weight_ton': _float(net_weight_ton), 'gross_weight_ton': _float(gross_weight_ton), 'unit_price': _float(unit_price), 'total_amount': round(_float(qty_ton) * _float(unit_price), 2), 'sort_order': int(row_count)+1, 'notes': _text(notes), 'created_at': now, 'updated_at': now})
         recalc_deal_totals(conn, deal_id)
-        shipment = conn.execute(text('SELECT * FROM shipments WHERE id=:id'), {'id': deal.shipment_id}).fetchone()
-        deal_now = conn.execute(text('SELECT * FROM shipment_deals WHERE id=:id'), {'id': deal_id}).fetchone()
-        issues = build_deal_validation(conn, deal_now, shipment, fetch_deal_items(conn, deal_id))
-        conn.execute(text('UPDATE shipment_deals SET status=:status, updated_at=:updated_at WHERE id=:id'), {
-            'status': ('Ready' if not issues else 'Draft'),
-            'updated_at': time.time(),
-            'id': deal_id,
-        })
-        log_activity(user.username, 'add_deal_item', 'shipment_deal', deal_id, product_name, conn=conn)
     return redirect(f'/deal/{deal_id}?success=item_added')
 
 
-@app.post('/deal/{deal_id}/item/{item_id}/update')
-def update_deal_item(request: Request,
-                     deal_id: int,
-                     item_id: int,
-                     qty_ton: float = Form(0),
-                     cartons_count: int = Form(0),
-                     net_weight_ton: float = Form(0),
-                     gross_weight_ton: float = Form(0),
-                     unit_price: str = Form(''),
-                     notes: str = Form('')):
-    user = require_editor(request)
-    with engine.begin() as conn:
-        deal = conn.execute(text('SELECT * FROM shipment_deals WHERE id=:id'), {'id': deal_id}).fetchone()
-        item = conn.execute(text('SELECT * FROM shipment_deal_items WHERE id=:id AND deal_id=:deal_id'), {'id': item_id, 'deal_id': deal_id}).fetchone()
-        if not deal or not item:
-            return redirect(f'/deal/{deal_id}?error=item_not_found')
-        resolved_price = _float(unit_price)
-        if resolved_price <= 0:
-            fake_product = SimpleNamespace(id=getattr(item, 'product_id', 0), product_name=getattr(item, 'product_name', ''), weight_label=getattr(item, 'weight_label', ''))
-            resolved_price = lookup_client_product_price(conn, deal, fake_product, getattr(item, 'product_name', ''))
-        conn.execute(text("""
-            UPDATE shipment_deal_items
-            SET qty_ton=:qty_ton,
-                cartons_count=:cartons_count,
-                net_weight_ton=:net_weight_ton,
-                gross_weight_ton=:gross_weight_ton,
-                unit_price=:unit_price,
-                total_amount=:total_amount,
-                notes=:notes,
-                updated_at=:updated_at
-            WHERE id=:id AND deal_id=:deal_id
-        """), {
-            'id': item_id,
-            'deal_id': deal_id,
-            'qty_ton': _float(qty_ton),
-            'cartons_count': _int(cartons_count),
-            'net_weight_ton': _float(net_weight_ton),
-            'gross_weight_ton': _float(gross_weight_ton),
-            'unit_price': resolved_price,
-            'total_amount': round(_float(qty_ton) * resolved_price, 2),
-            'notes': _text(notes),
-            'updated_at': time.time(),
-        })
-        remember_client_product_price(conn, deal, _int(getattr(item, 'product_id', 0)), _text(getattr(item, 'product_name', '')), _text(getattr(item, 'weight_label', '')), resolved_price, user.username, getattr(deal, 'currency', 'USD'))
-        recalc_deal_totals(conn, deal_id)
-        shipment = conn.execute(text('SELECT * FROM shipments WHERE id=:id'), {'id': deal.shipment_id}).fetchone()
-        deal_now = conn.execute(text('SELECT * FROM shipment_deals WHERE id=:id'), {'id': deal_id}).fetchone()
-        issues = build_deal_validation(conn, deal_now, shipment, fetch_deal_items(conn, deal_id))
-        conn.execute(text('UPDATE shipment_deals SET status=:status, updated_at=:updated_at WHERE id=:id'), {
-            'status': ('Ready' if not issues else 'Draft'),
-            'updated_at': time.time(),
-            'id': deal_id,
-        })
-        log_activity(user.username, 'update_deal_item', 'shipment_deal', deal_id, _text(getattr(item, 'product_name', '')), conn=conn)
-    return redirect(f'/deal/{deal_id}?success=item_updated')
-
-
-@app.post('/deal/{deal_id}/item/{item_id}/delete')
-def delete_deal_item(request: Request, deal_id: int, item_id: int):
-    user = require_editor(request)
-    with engine.begin() as conn:
-        deal = conn.execute(text('SELECT * FROM shipment_deals WHERE id=:id'), {'id': deal_id}).fetchone()
-        item = conn.execute(text('SELECT * FROM shipment_deal_items WHERE id=:id AND deal_id=:deal_id'), {'id': item_id, 'deal_id': deal_id}).fetchone()
-        if not deal or not item:
-            return redirect(f'/deal/{deal_id}?error=item_not_found')
-        conn.execute(text('DELETE FROM shipment_deal_items WHERE id=:id AND deal_id=:deal_id'), {'id': item_id, 'deal_id': deal_id})
-        recalc_deal_totals(conn, deal_id)
-        shipment = conn.execute(text('SELECT * FROM shipments WHERE id=:id'), {'id': deal.shipment_id}).fetchone()
-        deal_now = conn.execute(text('SELECT * FROM shipment_deals WHERE id=:id'), {'id': deal_id}).fetchone()
-        issues = build_deal_validation(conn, deal_now, shipment, fetch_deal_items(conn, deal_id))
-        conn.execute(text('UPDATE shipment_deals SET status=:status, updated_at=:updated_at WHERE id=:id'), {
-            'status': ('Ready' if not issues else 'Draft'),
-            'updated_at': time.time(),
-            'id': deal_id,
-        })
-        log_activity(user.username, 'delete_deal_item', 'shipment_deal', deal_id, _text(getattr(item, 'product_name', '')), conn=conn)
-    return redirect(f'/deal/{deal_id}?success=item_deleted')
-
-
-@app.post('/shipment/{shipment_id}/generate-all-packs')
-def generate_all_packs_for_shipment(request: Request, shipment_id: int):
-    user = require_editor(request)
-    try:
-        with engine.begin() as conn:
-            shipment = conn.execute(text('SELECT * FROM shipments WHERE id=:id'), {'id': shipment_id}).fetchone()
-            if not shipment:
-                return redirect('/shipments?error=shipment_not_found')
-            deals = conn.execute(text('SELECT id FROM shipment_deals WHERE shipment_id=:id ORDER BY id ASC'), {'id': shipment_id}).fetchall()
-            if not deals:
-                return redirect(f'/shipment/{shipment_id}?error=no_deals')
-            generated_files = []
-            generated_count = 0
-            skipped = []
-            for d in deals:
-                try:
-                    result = generate_deal_document_pack(conn, int(d.id), user.username)
-                    zip_file = next((p for p in result.get('files', []) if str(p).lower().endswith('.zip')), None)
-                    if zip_file and Path(zip_file).exists():
-                        generated_files.append(Path(zip_file))
-                    generated_count += 1
-                except Exception as exc:
-                    skipped.append(f"deal {int(d.id)}: {str(exc)[:120]}")
-            if not generated_files:
-                return redirect(f'/shipment/{shipment_id}?error=' + urllib.parse.quote('; '.join(skipped)[:240] or 'Nothing generated'))
-            batch_name = f"shipment_{shipment_id}_full_export_pack_{int(time.time())}.zip"
-            batch_path = EXPORT_DOC_UPLOADS_DIR / batch_name
-            with zipfile.ZipFile(batch_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for f in generated_files:
-                    zf.write(f, arcname=f.name)
-            conn.execute(text("""
-                INSERT INTO shipment_documents (shipment_id,doc_type,title,entry_mode,manual_text,filename,original_name,notes,created_by,created_at)
-                VALUES (:shipment_id,'export_pack',:title,'file','',:filename,:original_name,:notes,:created_by,:created_at)
-            """), {
-                'shipment_id': shipment_id,
-                'title': 'Full export pack batch',
-                'filename': batch_name,
-                'original_name': batch_name,
-                'notes': ('Skipped: ' + '; '.join(skipped[:3])) if skipped else f'{generated_count} deal pack(s) generated',
-                'created_by': user.username,
-                'created_at': time.time(),
-            })
-            conn.execute(text("UPDATE shipments SET current_status=:status, updated_at=:updated_at WHERE id=:id"), {
-                'status': 'Documents Generated',
-                'updated_at': time.time(),
-                'id': shipment_id,
-            })
-            log_activity(user.username, 'generate_full_export_pack', 'shipment', shipment_id, f'{generated_count} deals', conn=conn)
-        suffix = '&warning=' + urllib.parse.quote('; '.join(skipped)[:180]) if skipped else ''
-        return redirect(f'/shipment/{shipment_id}?success=full_pack_generated{suffix}')
-    except Exception as exc:
-        return redirect(f'/shipment/{shipment_id}?error=' + urllib.parse.quote(str(exc)[:240]))
-
-
 @app.post('/deal/{deal_id}/payment/add')
-def add_deal_payment(request: Request,
-                     deal_id: int,
-                     amount: float = Form(...),
-                     paid_on: str = Form(''),
-                     reference_no: str = Form(''),
-                     notes: str = Form('')):
+def add_deal_payment(request: Request, deal_id: int, amount: float = Form(...), paid_on: str = Form(''), reference_no: str = Form(''), notes: str = Form('')):
     user = require_editor(request)
-    now = time.time()
     with engine.begin() as conn:
         deal = conn.execute(text('SELECT * FROM shipment_deals WHERE id=:id'), {'id': deal_id}).fetchone()
         if not deal:
             return redirect('/shipments?error=deal_not_found')
-        conn.execute(text("""
-            INSERT INTO deal_payments (deal_id, amount, paid_on, reference_no, notes, created_by, created_at)
-            VALUES (:deal_id, :amount, :paid_on, :reference_no, :notes, :created_by, :created_at)
-        """), {
-            'deal_id': deal_id,
-            'amount': _float(amount),
-            'paid_on': parse_form_date(paid_on) or datetime.now().strftime('%d-%b-%Y'),
-            'reference_no': _text(reference_no),
-            'notes': _text(notes),
-            'created_by': user.username,
-            'created_at': now,
-        })
-        snapshot = build_deal_payment_snapshot(conn, deal)
-        new_status = getattr(deal, 'status', 'Draft')
-        if snapshot['payment_status'] == 'Paid':
-            new_status = 'Paid'
-        elif snapshot['payment_status'] in {'Partial', 'Overdue', 'Unpaid'} and _text(getattr(deal, 'status', '')) in {'', 'Draft'}:
-            new_status = 'Open'
-        conn.execute(text('UPDATE shipment_deals SET status=:status, updated_at=:updated_at WHERE id=:id'), {
-            'status': new_status,
-            'updated_at': now,
-            'id': deal_id,
-        })
-        log_activity(user.username, 'add_deal_payment', 'shipment_deal', deal_id, f"{_float(amount):.2f}", conn=conn)
+        conn.execute(text("""INSERT INTO deal_payments (deal_id, amount, paid_on, reference_no, notes, created_by, created_at) VALUES (:deal_id, :amount, :paid_on, :reference_no, :notes, :created_by, :created_at)"""), {'deal_id': deal_id, 'amount': _float(amount), 'paid_on': parse_form_date(paid_on) or datetime.now().strftime('%d-%b-%Y'), 'reference_no': _text(reference_no), 'notes': _text(notes), 'created_by': user.username, 'created_at': time.time()})
     return redirect(f'/deal/{deal_id}?success=payment_added')
 
 
 @app.get('/export/deals', response_class=HTMLResponse)
-def deals_index(request: Request, q: str = '', payment_status: str = '', shipment_q: str = ''):
+def deals_index(request: Request, q: str = ''):
     user = require_login(request)
     sql = """
         SELECT d.*, s.shipment_no, s.vessel_name, s.origin_port, s.destination_port
@@ -6500,23 +5866,16 @@ def deals_index(request: Request, q: str = '', payment_status: str = '', shipmen
         LEFT JOIN shipments s ON s.id=d.shipment_id
         WHERE 1=1
     """
-    params = {'q': f'%{_text(q)}%', 'shipment_q': f'%{_text(shipment_q)}%'}
+    params = {'q': f'%{_text(q)}%'}
     if _text(q):
         sql += " AND (d.invoice_no LIKE :q OR d.client_name LIKE :q OR d.product_name LIKE :q OR s.shipment_no LIKE :q)"
-    if _text(shipment_q):
-        sql += " AND s.shipment_no LIKE :shipment_q"
     sql += ' ORDER BY d.id DESC'
     with engine.begin() as conn:
-        raw_rows = conn.execute(text(sql), params).fetchall()
-        rows = []
-        for r in raw_rows:
-            m = dict(r._mapping)
-            m.update(build_deal_payment_snapshot(conn, r))
-            if payment_status and m.get('payment_status') != payment_status:
-                continue
-            rows.append(m)
+        rows = conn.execute(text(sql), params).fetchall()
     return templates.TemplateResponse('deals_index.html', {
-        'request': request, 'username': user.username, 'user': user, 'rows': rows, 'q': q, 'payment_status_filter': payment_status, 'shipment_q': shipment_q,
+        'request': request, 'username': user.username, 'user': user, 'rows': rows, 'q': q,
         'title': 'Customer Deals', 'latest_notification_id': latest_notification_id_for_user(user.username)
     })
+
+
 ensure_shipment_deal_tables()
